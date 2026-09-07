@@ -1,0 +1,3 @@
+task,variant,run,input_tokens,output_tokens,tool_calls,elapsed_seconds,success,notes
+localized-change,control,1,0,0,0,0,false,replace with an observed run
+localized-change,doccanon,1,0,0,0,0,false,replace with an observed run

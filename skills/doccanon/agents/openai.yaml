@@ -1,0 +1,4 @@
+interface:
+  display_name: "DocCanon"
+  short_description: "Verified project memory for coding agents"
+  default_prompt: "Use $doccanon to set up or maintain branch-aware, evidence-backed project memory for this repository."

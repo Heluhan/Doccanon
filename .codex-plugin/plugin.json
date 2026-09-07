@@ -1,0 +1,33 @@
+{
+  "name": "doccanon",
+  "version": "0.8.0",
+  "description": "Verified, branch-aware project memory that stops coding agents from trusting stale documentation.",
+  "author": {
+    "name": "Heluhan"
+  },
+  "license": "MIT",
+  "keywords": [
+    "documentation",
+    "governance",
+    "project-memory",
+    "migration",
+    "agents"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "DocCanon",
+    "shortDescription": "Verified project memory for coding agents.",
+    "longDescription": "DocCanon keeps coding agents from trusting stale repository documentation. It checks branch-relative freshness before work, routes minimal canonical context, maps every changed implementation file to feature and cross-cutting owners, blocks unaccounted changes, migrates scattered brownfield knowledge with evidence receipts, and automatically captures auditable development and evidence-backed release history.",
+    "developerName": "Heluhan",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Set up DocCanon for this project.",
+      "Migrate this project's scattered documentation into DocCanon.",
+      "Check whether this project's canonical docs are stale."
+    ]
+  }
+}

@@ -1,0 +1,2087 @@
+#!/usr/bin/env python3
+"""Deterministic project-state and freshness helper for the DocCanon skill."""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import hashlib
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+
+CONFIG_NAME = ".doccanon.yml"
+DEFAULT_MIGRATION_MANIFEST = "docs/operations/doccanon-migration.json"
+DEFAULT_FEATURE_MANIFEST = "docs/features/manifest.json"
+MATURITIES = {"bootstrapping", "governed"}
+CONTEXT_AUTHORITIES = {"current-state", "human-confirmed", "append-only", "generated"}
+HISTORICAL_AUTHORITIES = {"snapshot", "historical", "superseded", "draft", "unclassified"}
+REQUIRED_FEATURE_SECTIONS = {
+    "user outcome",
+    "scope",
+    "behavior",
+    "states and failure modes",
+    "data and dependencies",
+    "invariants",
+    "change guidance",
+    "implementation",
+    "verification",
+}
+MANAGED_HOOK_START = "# >>> doccanon managed block >>>"
+MANAGED_HOOK_END = "# <<< doccanon managed block <<<"
+EXCLUDED_PARTS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "coverage",
+    ".next",
+    ".cache",
+}
+DOC_EXTENSIONS = {".md", ".mdx", ".txt", ".rst", ".adoc", ".markdown"}
+DOC_WORDS = {
+    "architecture",
+    "context",
+    "decision",
+    "design",
+    "documentation",
+    "feature",
+    "interaction",
+    "migration",
+    "overview",
+    "plan",
+    "product",
+    "progress",
+    "requirements",
+    "runbook",
+    "schema",
+    "specification",
+    "workflow",
+}
+WORD_RE = re.compile(r"[\w-]+", re.UNICODE)
+CODE_REF_RE = re.compile(r"`([^`\n]+)`")
+CONTEXT_STOP_WORDS = {
+    "a", "an", "and", "add", "change", "code", "create", "document", "docs", "feature",
+    "for", "from", "in", "implement", "modify", "new", "of", "on", "please", "the", "to",
+    "update", "with",
+}
+
+
+class DocCanonError(RuntimeError):
+    pass
+
+
+def run_git(root: Path, args: list[str], check: bool = True) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if check and result.returncode != 0:
+        raise DocCanonError(result.stderr.strip() or "git command failed")
+    return result.stdout.strip()
+
+
+def project_root(value: str | None) -> Path:
+    start = Path(value or os.getcwd()).resolve()
+    if start.is_file():
+        start = start.parent
+    result = subprocess.run(
+        ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    return Path(result.stdout.strip()).resolve() if result.returncode == 0 else start
+
+
+def scalar(value: str) -> Any:
+    value = value.strip()
+    if not value:
+        return ""
+    if value in {"true", "false"}:
+        return value == "true"
+    if value in {"null", "~"}:
+        return None
+    if (value.startswith('"') and value.endswith('"')) or (
+        value.startswith("'") and value.endswith("'")
+    ):
+        return value[1:-1]
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def parse_simple_yaml(text: str) -> dict[str, Any]:
+    """Parse the intentionally flat config/frontmatter subset used by DocCanon."""
+    data: dict[str, Any] = {}
+    current_list: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("-") and current_list:
+            data[current_list].append(scalar(line[1:].strip()))
+            continue
+        match = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
+        if not match:
+            continue
+        key, value = match.groups()
+        if value:
+            data[key] = scalar(value)
+            current_list = None
+        else:
+            data[key] = []
+            current_list = key
+    return data
+
+
+def dump_config(data: dict[str, Any]) -> str:
+    order = [
+        "schema_version",
+        "status",
+        "maturity",
+        "docs_root",
+        "context_file",
+        "required_domains",
+        "migration_manifest",
+        "feature_manifest",
+        "branch_policy",
+        "integration_branch",
+        "release_branches",
+        "development_log_root",
+        "release_log_root",
+        "reconsider",
+        "reason",
+        "decided_at",
+    ]
+    lines: list[str] = []
+    for key in order:
+        if key not in data or data[key] is None:
+            continue
+        value = data[key]
+        if isinstance(value, list):
+            lines.append(f"{key}:")
+            lines.extend(f"  - {json.dumps(str(item), ensure_ascii=False)}" for item in value)
+            continue
+        if isinstance(value, bool):
+            rendered = "true" if value else "false"
+        elif isinstance(value, int):
+            rendered = str(value)
+        else:
+            rendered = json.dumps(str(value), ensure_ascii=False)
+        lines.append(f"{key}: {rendered}")
+    return "\n".join(lines) + "\n"
+
+
+def load_config(root: Path) -> dict[str, Any] | None:
+    path = root / CONFIG_NAME
+    if not path.exists():
+        return None
+    data = parse_simple_yaml(path.read_text(encoding="utf-8"))
+    if data.get("status") not in {"enabled", "disabled"}:
+        raise DocCanonError(f"Invalid status in {CONFIG_NAME}")
+    if data["status"] == "enabled":
+        data.setdefault("maturity", "bootstrapping")
+        if data["maturity"] not in MATURITIES:
+            raise DocCanonError(f"Invalid maturity in {CONFIG_NAME}")
+        data.setdefault("required_domains", [])
+        data.setdefault("branch_policy", "aware")
+        data.setdefault("release_branches", [])
+        data.setdefault("development_log_root", "docs/development")
+        data.setdefault("release_log_root", "docs/releases")
+    return data
+
+
+def write_config(root: Path, data: dict[str, Any]) -> None:
+    target = root / CONFIG_NAME
+    temp = target.with_suffix(target.suffix + ".tmp")
+    temp.write_text(dump_config(data), encoding="utf-8")
+    temp.replace(target)
+
+
+def template_path(name: str) -> Path:
+    return Path(__file__).resolve().parent.parent / "assets" / name
+
+
+def ensure_base_docs(root: Path, config: dict[str, Any]) -> list[str]:
+    created: list[str] = []
+    context = root / str(config["context_file"])
+    docs_root = root / str(config["docs_root"])
+    docs_index = docs_root / "README.md"
+    if not context.exists():
+        context.write_text(template_path("CONTEXT.md").read_text(encoding="utf-8"), encoding="utf-8")
+        created.append(context.relative_to(root).as_posix())
+    docs_root.mkdir(parents=True, exist_ok=True)
+    if not docs_index.exists():
+        docs_index.write_text(template_path("docs-index.md").read_text(encoding="utf-8"), encoding="utf-8")
+        created.append(docs_index.relative_to(root).as_posix())
+    return created
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = False) -> dict[str, Any]:
+    branch = branch_context(root)
+    if branch["kind"] == "feature" and not allow_feature_branch:
+        raise DocCanonError(
+            f"Refusing repository-wide initialization on feature branch {branch['current_branch']}; "
+            "use the integration branch or pass --allow-feature-branch explicitly"
+        )
+    if branch["dirty"] and not allow_dirty:
+        raise DocCanonError("Refusing initialization in a dirty worktree; isolate or finish existing work, or pass --allow-dirty explicitly")
+    config = {
+        "schema_version": 3,
+        "status": "enabled",
+        "maturity": "bootstrapping",
+        "docs_root": "docs",
+        "context_file": "CONTEXT.md",
+        "required_domains": [],
+        "branch_policy": "aware",
+        "integration_branch": branch["integration_branch"],
+        "release_branches": branch["release_branches"],
+        "development_log_root": "docs/development",
+        "release_log_root": "docs/releases",
+        "reconsider": "manual",
+        "decided_at": now_iso(),
+    }
+    write_config(root, config)
+    created = ensure_base_docs(root, config)
+    return {"status": "enabled", "config": CONFIG_NAME, "created": created, "branch": branch}
+
+
+def disable(root: Path, reason: str) -> dict[str, Any]:
+    existing = load_config(root) or {}
+    config = {
+        "schema_version": 3,
+        "status": "disabled",
+        "docs_root": existing.get("docs_root", "docs"),
+        "context_file": existing.get("context_file", "CONTEXT.md"),
+        "reconsider": "manual",
+        "reason": reason,
+        "decided_at": now_iso(),
+    }
+    write_config(root, config)
+    return {"status": "disabled", "config": CONFIG_NAME, "preserved_docs": True}
+
+
+def git_head(root: Path) -> str | None:
+    try:
+        return run_git(root, ["rev-parse", "HEAD"])
+    except DocCanonError:
+        return None
+
+
+def git_ref_exists(root: Path, ref: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def current_branch(root: Path) -> str:
+    result = run_git(root, ["symbolic-ref", "--quiet", "--short", "HEAD"], check=False)
+    return result or "DETACHED"
+
+
+def revision_is_ancestor(root: Path, revision: str, descendant: str = "HEAD") -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", revision, descendant],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def branch_context(root: Path, config: dict[str, Any] | None = None, target: str | None = None) -> dict[str, Any]:
+    branch = current_branch(root)
+    configured = str(config.get("integration_branch", "")) if config else ""
+    candidates = [configured] if configured else []
+    candidates.extend(["develop", "main", "master"])
+    available: list[tuple[str, str]] = []
+    for name in candidates:
+        if not name or any(existing[0] == name for existing in available):
+            continue
+        ref = f"origin/{name}" if git_ref_exists(root, f"origin/{name}") else name
+        if git_ref_exists(root, ref):
+            available.append((name, ref))
+    integration_name = configured if configured else (available[0][0] if available else branch)
+    integration_ref = next((ref for name, ref in available if name == integration_name), integration_name)
+    if not configured and available:
+        ancestors: list[tuple[int, str, str]] = []
+        for name, ref in available:
+            if revision_is_ancestor(root, ref):
+                distance_text = run_git(root, ["rev-list", "--count", f"{ref}..HEAD"], check=False)
+                ancestors.append((int(distance_text or 0), name, ref))
+        if ancestors:
+            _, integration_name, integration_ref = sorted(ancestors)[0]
+    release_branches = [str(item) for item in (config.get("release_branches", []) if config else [])]
+    if not release_branches and integration_name != "main" and git_ref_exists(root, "main"):
+        release_branches = ["main"]
+    selected = target or integration_ref
+    if target and "/" not in target and git_ref_exists(root, f"origin/{target}"):
+        selected = f"origin/{target}"
+    elif target and not git_ref_exists(root, target):
+        remote_target = f"origin/{target}"
+        selected = remote_target if git_ref_exists(root, remote_target) else target
+    merge_base = run_git(root, ["merge-base", selected, "HEAD"], check=False) if git_ref_exists(root, selected) else None
+    ahead = behind = 0
+    if git_ref_exists(root, selected):
+        counts = run_git(root, ["rev-list", "--left-right", "--count", f"{selected}...HEAD"], check=False).split()
+        if len(counts) == 2:
+            behind, ahead = (int(counts[0]), int(counts[1]))
+    dirty_lines = [line for line in run_git(root, ["status", "--porcelain"], check=False).splitlines() if line]
+    kind = "integration" if branch == integration_name else ("release" if branch in release_branches else "feature")
+    return {
+        "current_branch": branch,
+        "kind": kind,
+        "integration_branch": integration_name,
+        "release_branches": release_branches,
+        "base_ref": selected,
+        "merge_base": merge_base,
+        "ahead": ahead,
+        "behind": behind,
+        "dirty": bool(dirty_lines),
+        "dirty_files": dirty_lines,
+        "head": git_head(root),
+    }
+
+
+def changed_files(root: Path, *, base: str | None = None, staged: bool = False) -> set[str]:
+    changed: set[str] = set()
+    try:
+        if staged:
+            output = run_git(root, ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"])
+            return {line for line in output.splitlines() if line}
+        if base:
+            output = run_git(root, ["diff", "--name-only", "--diff-filter=ACMRD", f"{base}...HEAD"])
+            changed.update(line for line in output.splitlines() if line)
+        for args in (
+            ["diff", "--name-only", "--diff-filter=ACMRD"],
+            ["diff", "--cached", "--name-only", "--diff-filter=ACMRD"],
+        ):
+            output = run_git(root, args)
+            changed.update(line for line in output.splitlines() if line)
+        untracked = run_git(root, ["ls-files", "--others", "--exclude-standard"])
+        changed.update(line for line in untracked.splitlines() if line)
+    except DocCanonError:
+        return set()
+    return changed
+
+
+def diff_since(root: Path, revision: str) -> set[str]:
+    try:
+        run_git(root, ["rev-parse", "--verify", f"{revision}^{{commit}}"])
+        output = run_git(root, ["diff", "--name-only", "--diff-filter=ACMRD", f"{revision}..HEAD"])
+        return {line for line in output.splitlines() if line}
+    except DocCanonError:
+        raise DocCanonError(f"Unknown doccanon_verified_at revision: {revision}")
+
+
+def frontmatter(text: str) -> dict[str, Any]:
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---\n", 4)
+    return parse_simple_yaml(text[4:end]) if end >= 0 else {}
+
+
+def markdown_files(root: Path, config: dict[str, Any]) -> list[Path]:
+    result: list[Path] = []
+    context = root / str(config["context_file"])
+    docs = root / str(config["docs_root"])
+    if context.is_file():
+        result.append(context)
+    if docs.is_dir():
+        result.extend(path for path in docs.rglob("*") if path.is_file() and path.suffix.lower() in DOC_EXTENSIONS)
+    return sorted(set(result))
+
+
+def match_any(path: str, patterns: Iterable[str]) -> bool:
+    normalized = path.replace(os.sep, "/")
+    return any(fnmatch.fnmatchcase(normalized, pattern) for pattern in patterns)
+
+
+@dataclass
+class Finding:
+    level: str
+    code: str
+    message: str
+    document: str | None = None
+    files: list[str] | None = None
+
+
+@dataclass
+class DocumentRecord:
+    path: Path
+    relative: str
+    authority: str
+    covers: list[str]
+    domains: list[str]
+    verified_at: str | None
+
+
+def document_records(root: Path, config: dict[str, Any]) -> list[DocumentRecord]:
+    records: list[DocumentRecord] = []
+    for path in markdown_files(root, config):
+        rel = path.relative_to(root).as_posix()
+        meta = frontmatter(path.read_text(encoding="utf-8", errors="replace"))
+        covers = meta.get("doccanon_covers", [])
+        domains = meta.get("doccanon_domains", [])
+        if isinstance(covers, str):
+            covers = [covers]
+        if isinstance(domains, str):
+            domains = [domains]
+        records.append(
+            DocumentRecord(
+                path=path,
+                relative=rel,
+                authority=str(meta.get("doccanon_authority", "unclassified")),
+                covers=[str(item) for item in covers],
+                domains=[str(item) for item in domains],
+                verified_at=str(meta["doccanon_verified_at"]) if meta.get("doccanon_verified_at") else None,
+            )
+        )
+    return records
+
+
+def revision_exists(root: Path, revision: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", f"{revision}^{{commit}}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def migration_manifest_status(root: Path, manifest: str) -> dict[str, Any]:
+    path = (root / manifest).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise DocCanonError("Migration manifest must be inside the project") from exc
+    if not path.is_file():
+        return {
+            "status": "missing",
+            "manifest": manifest,
+            "candidate_count": 0,
+            "mapped_count": 0,
+            "integrated_count": 0,
+            "residual_claim_count": 0,
+            "unresolved_count": 0,
+            "findings": ["migration manifest does not exist"],
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DocCanonError(f"Invalid migration manifest: {exc}") from exc
+    entries = payload.get("entries", [])
+    if not isinstance(entries, list):
+        raise DocCanonError("Migration manifest entries must be an array")
+    schema_version = payload.get("schema_version")
+    candidate_count = int(payload.get("candidate_count", len(entries)))
+    if schema_version != 2:
+        findings = [
+            f"migration manifest schema_version must be 2; version {schema_version!r} records mapping but does not prove canonical integration"
+        ]
+        if candidate_count != len(entries):
+            findings.append(f"candidate_count is {candidate_count}, but manifest has {len(entries)} entries")
+        return {
+            "status": "incomplete",
+            "manifest": path.relative_to(root).as_posix(),
+            "candidate_count": candidate_count,
+            "mapped_count": len(entries),
+            "integrated_count": 0,
+            "residual_claim_count": 0,
+            "unresolved_count": max(candidate_count, len(entries)),
+            "findings": findings,
+        }
+    findings: list[str] = []
+    sources: set[str] = set()
+    unresolved = 0
+    integrated_count = 0
+    residual_count = 0
+    required = {
+        "source",
+        "classification",
+        "action",
+        "status",
+        "confidence",
+        "evidence",
+        "conflicts",
+        "requires_review",
+    }
+    terminal = {"integrated", "historical", "superseded", "ignored", "archived"}
+    integration_actions = {"adopt", "move", "merge", "split"}
+    retirement_actions = {"archive", "supersede", "ignore"}
+    integrated_dispositions = {"canonical", "superseded", "archived"}
+
+    def target_headings(target: Path) -> set[str]:
+        text = target.read_text(encoding="utf-8", errors="replace")
+        return {
+            match.group(1).strip()
+            for match in re.finditer(r"^#{1,6}\s+(.+?)\s*$", text, flags=re.MULTILINE)
+        }
+
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            findings.append(f"entry {index} must be an object")
+            unresolved += 1
+            continue
+        missing = sorted(required - set(entry))
+        if missing:
+            findings.append(f"entry {index} missing: {', '.join(missing)}")
+        source = str(entry.get("source", ""))
+        if source in sources:
+            findings.append(f"duplicate source: {source}")
+        sources.add(source)
+        entry_unresolved = bool(missing)
+        status = entry.get("status")
+        action = entry.get("action")
+        conflicts = entry.get("conflicts")
+        evidence = entry.get("evidence")
+        if status not in terminal:
+            entry_unresolved = True
+        if entry.get("requires_review") is True:
+            entry_unresolved = True
+        if not isinstance(conflicts, list):
+            findings.append(f"entry {index} conflicts must be an array")
+            entry_unresolved = True
+        elif conflicts:
+            findings.append(f"entry {index} has unresolved conflicts")
+            entry_unresolved = True
+        if not isinstance(evidence, list) or not evidence or not all(
+            isinstance(item, str) and item.strip() for item in evidence
+        ):
+            findings.append(f"entry {index} must record evidence for its disposition")
+            entry_unresolved = True
+
+        if status == "integrated":
+            integrated_count += 1
+            if action not in integration_actions:
+                findings.append(f"entry {index} integrated status requires adopt, move, merge, or split")
+                entry_unresolved = True
+            integrations = entry.get("integrations")
+            verification = entry.get("verification")
+            residual = entry.get("residual_claims")
+            disposition = entry.get("source_disposition")
+            if not isinstance(integrations, list) or not integrations:
+                findings.append(f"entry {index} must include at least one canonical integration receipt")
+                entry_unresolved = True
+            else:
+                for receipt_index, receipt in enumerate(integrations):
+                    label = f"entry {index} integration {receipt_index}"
+                    if not isinstance(receipt, dict):
+                        findings.append(f"{label} must be an object")
+                        entry_unresolved = True
+                        continue
+                    target_name = receipt.get("target")
+                    sections = receipt.get("sections")
+                    claims = receipt.get("absorbed_claims")
+                    if not isinstance(target_name, str) or not target_name:
+                        findings.append(f"{label} missing target")
+                        entry_unresolved = True
+                    else:
+                        target = (root / target_name).resolve()
+                        try:
+                            target.relative_to(root)
+                        except ValueError:
+                            findings.append(f"{label} target must be inside the project")
+                            entry_unresolved = True
+                        else:
+                            if not target.is_file():
+                                findings.append(f"{label} target does not exist: {target_name}")
+                                entry_unresolved = True
+                            elif isinstance(sections, list) and sections:
+                                headings = target_headings(target)
+                                missing_sections = [section for section in sections if section not in headings]
+                                if missing_sections:
+                                    findings.append(
+                                        f"{label} target is missing sections: {', '.join(str(item) for item in missing_sections)}"
+                                    )
+                                    entry_unresolved = True
+                    if not isinstance(sections, list) or not sections or not all(isinstance(item, str) and item for item in sections):
+                        findings.append(f"{label} must name canonical target sections")
+                        entry_unresolved = True
+                    if not isinstance(claims, list) or not claims or not all(isinstance(item, str) and item.strip() for item in claims):
+                        findings.append(f"{label} must record absorbed claims")
+                        entry_unresolved = True
+            if not isinstance(verification, list) or not verification or not all(
+                isinstance(item, str) and item.strip() for item in verification
+            ):
+                findings.append(f"entry {index} must record verification evidence for integrated claims")
+                entry_unresolved = True
+            if not isinstance(residual, list):
+                findings.append(f"entry {index} residual_claims must be an array")
+                entry_unresolved = True
+            elif residual:
+                residual_count += len(residual)
+                findings.append(f"entry {index} still has {len(residual)} residual claim(s)")
+                entry_unresolved = True
+            if disposition not in integrated_dispositions:
+                findings.append(f"entry {index} must retire the legacy source or declare it canonical")
+                entry_unresolved = True
+            rejected = entry.get("rejected_claims", [])
+            if not isinstance(rejected, list):
+                findings.append(f"entry {index} rejected_claims must be an array")
+                entry_unresolved = True
+            else:
+                for rejected_index, claim in enumerate(rejected):
+                    label = f"entry {index} rejected claim {rejected_index}"
+                    if not isinstance(claim, dict):
+                        findings.append(f"{label} must be an object")
+                        entry_unresolved = True
+                        continue
+                    if not isinstance(claim.get("claim"), str) or not claim["claim"].strip():
+                        findings.append(f"{label} must name the rejected claim")
+                        entry_unresolved = True
+                    if not isinstance(claim.get("reason"), str) or not claim["reason"].strip():
+                        findings.append(f"{label} must record a reason")
+                        entry_unresolved = True
+                    rejected_evidence = claim.get("evidence")
+                    if not isinstance(rejected_evidence, list) or not rejected_evidence or not all(
+                        isinstance(item, str) and item.strip() for item in rejected_evidence
+                    ):
+                        findings.append(f"{label} must record evidence")
+                        entry_unresolved = True
+        elif status in terminal:
+            if action not in retirement_actions:
+                findings.append(f"entry {index} non-integrated source requires archive, supersede, or ignore")
+                entry_unresolved = True
+            reason = entry.get("disposition_reason")
+            if not isinstance(reason, str) or not reason.strip():
+                findings.append(f"entry {index} non-integrated source requires a disposition_reason")
+                entry_unresolved = True
+
+        if entry_unresolved:
+            unresolved += 1
+    if candidate_count != len(entries):
+        findings.append(f"candidate_count is {candidate_count}, but manifest has {len(entries)} entries")
+    status = "complete" if not findings and unresolved == 0 and candidate_count == len(entries) else "incomplete"
+    return {
+        "status": status,
+        "manifest": path.relative_to(root).as_posix(),
+        "candidate_count": candidate_count,
+        "mapped_count": len(entries),
+        "integrated_count": integrated_count,
+        "residual_claim_count": residual_count,
+        "unresolved_count": unresolved,
+        "findings": findings,
+    }
+
+
+def feature_manifest_status(root: Path, manifest: str) -> dict[str, Any]:
+    path = (root / manifest).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise DocCanonError("Feature manifest must be inside the project") from exc
+    if not path.is_file():
+        return {
+            "status": "missing",
+            "manifest": manifest,
+            "feature_count": 0,
+            "documented_count": 0,
+            "unresolved_count": 0,
+            "findings": ["feature manifest does not exist"],
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DocCanonError(f"Invalid feature manifest: {exc}") from exc
+    features = payload.get("features", [])
+    if not isinstance(features, list):
+        raise DocCanonError("Feature manifest features must be an array")
+    findings: list[str] = []
+    project_files = [path.relative_to(root).as_posix() for path in tracked_and_untracked_files(root)]
+    identifiers: set[str] = set()
+    documented = 0
+    unresolved = 0
+    for index, feature in enumerate(features):
+        if not isinstance(feature, dict):
+            findings.append(f"feature {index} must be an object")
+            unresolved += 1
+            continue
+        identifier = str(feature.get("id", "")).strip()
+        name = str(feature.get("name", "")).strip()
+        state = str(feature.get("status", "review")).strip()
+        if not identifier or not name:
+            findings.append(f"feature {index} requires id and name")
+            unresolved += 1
+            continue
+        if identifier in identifiers:
+            findings.append(f"duplicate feature id: {identifier}")
+            unresolved += 1
+            continue
+        identifiers.add(identifier)
+        if state == "excluded":
+            if not str(feature.get("reason", "")).strip():
+                findings.append(f"excluded feature {identifier} requires a reason")
+                unresolved += 1
+            continue
+        if state == "retired":
+            continue
+        if state != "current":
+            findings.append(f"feature {identifier} has unresolved status: {state}")
+            unresolved += 1
+            continue
+        document = str(feature.get("document", "")).strip()
+        patterns = feature.get("code_patterns", [])
+        if isinstance(patterns, str):
+            patterns = [patterns]
+        if not document or not patterns:
+            findings.append(f"current feature {identifier} requires document and code_patterns")
+            unresolved += 1
+            continue
+        document_path = (root / document).resolve()
+        try:
+            document_path.relative_to(root)
+        except ValueError:
+            findings.append(f"feature {identifier} document is outside the project")
+            unresolved += 1
+            continue
+        if not document_path.is_file():
+            findings.append(f"feature {identifier} document does not exist: {document}")
+            unresolved += 1
+            continue
+        text = document_path.read_text(encoding="utf-8", errors="replace")
+        meta = frontmatter(text)
+        covers = meta.get("doccanon_covers", [])
+        domains = meta.get("doccanon_domains", [])
+        if isinstance(covers, str):
+            covers = [covers]
+        if isinstance(domains, str):
+            domains = [domains]
+        headings = {heading.strip().lower() for heading in re.findall(r"(?m)^##\s+(.+?)\s*$", text)}
+        sections = markdown_sections(text)
+        missing_sections = sorted(REQUIRED_FEATURE_SECTIONS - headings)
+        problems: list[str] = []
+        if meta.get("doccanon_authority") != "current-state":
+            problems.append("authority must be current-state")
+        if str(meta.get("doccanon_feature", "")) != identifier:
+            problems.append("doccanon_feature must match manifest id")
+        if "features" not in {str(item) for item in domains}:
+            problems.append("doccanon_domains must include features")
+        if not covers:
+            problems.append("doccanon_covers is required")
+        elif not set(str(item) for item in patterns).issubset({str(item) for item in covers}):
+            problems.append("manifest code_patterns must also appear in doccanon_covers")
+        unmatched_patterns = [
+            str(pattern)
+            for pattern in patterns
+            if not any(fnmatch.fnmatchcase(candidate, str(pattern)) for candidate in project_files)
+        ]
+        if unmatched_patterns:
+            problems.append("code_patterns match no project files: " + ", ".join(unmatched_patterns))
+        anchor = str(meta.get("doccanon_verified_at", ""))
+        if not anchor or not revision_exists(root, anchor):
+            problems.append("doccanon_verified_at must reference a Git commit")
+        elif not revision_is_ancestor(root, anchor):
+            problems.append("doccanon_verified_at is not an ancestor of the current branch")
+        if missing_sections:
+            problems.append("missing sections: " + ", ".join(missing_sections))
+        thin_sections = sorted(
+            section for section in REQUIRED_FEATURE_SECTIONS
+            if section in sections and len(re.sub(r"\s+", " ", sections[section]).strip()) < 20
+        )
+        if thin_sections:
+            problems.append("sections are too thin: " + ", ".join(thin_sections))
+        if len(re.sub(r"\s+", " ", sections.get("change guidance", "")).strip()) < 60:
+            problems.append("Change guidance must identify coupled surfaces and failure risks")
+        verification = sections.get("verification", "")
+        if verification and not re.search(r"`[^`\n]+`|```", verification):
+            problems.append("Verification must contain a concrete command or executable scenario")
+        if not code_references(root, text):
+            problems.append("body must reference at least one existing implementation file")
+        if problems:
+            findings.append(f"feature {identifier}: " + "; ".join(problems))
+            unresolved += 1
+            continue
+        documented += 1
+    if not features:
+        findings.append("feature manifest is empty")
+    status = "complete" if features and not findings and unresolved == 0 else "incomplete"
+    return {
+        "status": status,
+        "manifest": path.relative_to(root).as_posix(),
+        "feature_count": len(features),
+        "documented_count": documented,
+        "unresolved_count": unresolved,
+        "findings": findings,
+    }
+
+
+def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str, Any], int]:
+    config = load_config(root)
+    if config is None:
+        result = {"status": "unconfigured", "project": str(root), "findings": []}
+        return result, 0
+    if config["status"] == "disabled":
+        result = {"status": "disabled", "project": str(root), "findings": []}
+        return result, 0
+
+    findings: list[Finding] = []
+    required = [root / str(config.get("context_file", "CONTEXT.md")), root / str(config.get("docs_root", "docs")) / "README.md"]
+    for path in required:
+        if not path.exists():
+            findings.append(Finding("error", "missing-canonical-file", f"Missing {path.relative_to(root)}"))
+
+    current_changes = changed_files(root, base=base, staged=staged)
+    records = document_records(root, config)
+    doc_paths = {record.relative for record in records}
+    current_state = [record for record in records if record.authority == "current-state"]
+    covered_domains = sorted({domain for record in current_state for domain in record.domains})
+    required_domains = sorted({str(item) for item in config.get("required_domains", [])})
+    verified_documents = 0
+
+    for record in current_state:
+        rel = record.relative
+        if not record.covers:
+            findings.append(Finding("error", "missing-coverage", "Current-state document has no doccanon_covers patterns", rel))
+            continue
+        if not record.domains:
+            findings.append(Finding("error", "missing-domain", "Current-state document has no doccanon_domains", rel))
+            continue
+        anchor = record.verified_at
+        if not anchor or anchor in {"unverified", "none"}:
+            findings.append(Finding("error", "missing-anchor", "Current-state document has no verified Git revision", rel))
+            continue
+        if not revision_exists(root, anchor):
+            findings.append(Finding("error", "invalid-anchor", f"Unknown doccanon_verified_at revision: {anchor}", rel))
+            continue
+        if not revision_is_ancestor(root, anchor):
+            findings.append(Finding("error", "foreign-branch-anchor", "Verified revision is not an ancestor of the current branch", rel))
+            continue
+        text = record.path.read_text(encoding="utf-8", errors="replace")
+        quality_problems = current_state_quality_problems(root, text)
+        if quality_problems:
+            findings.append(
+                Finding(
+                    "error",
+                    "thin-current-state-document",
+                    "; ".join(quality_problems),
+                    rel,
+                )
+            )
+            continue
+        verified_documents += 1
+
+        relevant = {item for item in current_changes if item not in doc_paths and match_any(item, record.covers)}
+        if not staged and not base:
+            relevant.update(item for item in diff_since(root, anchor) if item not in doc_paths and match_any(item, record.covers))
+
+        if relevant and rel not in current_changes:
+            findings.append(
+                Finding(
+                    "error",
+                    "stale-document",
+                    "Covered implementation changed without a corresponding document update",
+                    rel,
+                    sorted(relevant),
+                )
+            )
+        elif relevant and rel in current_changes:
+            findings.append(
+                Finding(
+                    "info",
+                    "pending-sync",
+                    "Document changed alongside covered implementation; verify semantics before completion",
+                    rel,
+                    sorted(relevant),
+                )
+            )
+
+    missing_domains = sorted(set(required_domains) - set(covered_domains))
+    if missing_domains:
+        findings.append(
+            Finding("error", "missing-domain-coverage", "Required canonical domains have no verified current-state owner", files=missing_domains)
+        )
+
+    manifest_report: dict[str, Any] | None = None
+    if config.get("migration_manifest"):
+        manifest_report = migration_manifest_status(root, str(config["migration_manifest"]))
+        if manifest_report["status"] != "complete":
+            findings.append(
+                Finding("error", "incomplete-migration", "Migration manifest is missing, incomplete, or unresolved", str(config["migration_manifest"]))
+            )
+
+    feature_report: dict[str, Any] | None = None
+    if config.get("feature_manifest"):
+        feature_report = feature_manifest_status(root, str(config["feature_manifest"]))
+        if feature_report["status"] != "complete":
+            findings.append(
+                Finding("error", "incomplete-feature-library", "Feature manifest or one of its current feature contracts is incomplete", str(config["feature_manifest"]))
+            )
+    elif "features" in required_domains:
+        findings.append(
+            Finding("error", "missing-feature-manifest", "The features domain requires a per-feature manifest", DEFAULT_FEATURE_MANIFEST)
+        )
+
+    maturity = str(config.get("maturity", "bootstrapping"))
+    if not current_state:
+        findings.append(
+            Finding("warning", "no-current-state-coverage", "No current-state document is linked to implementation coverage")
+        )
+    if maturity != "governed":
+        status = "bootstrap-incomplete"
+    elif not current_state or verified_documents == 0 or any(item.level == "error" for item in findings):
+        status = "stale"
+    else:
+        status = "synchronized"
+    result = {
+        "status": status,
+        "maturity": maturity,
+        "project": str(root),
+        "head": git_head(root),
+        "branch": branch_context(root, config, base),
+        "changed_files": sorted(current_changes),
+        "coverage": {
+            "current_state_documents": len(current_state),
+            "verified_documents": verified_documents,
+            "covered_domains": covered_domains,
+            "required_domains": required_domains,
+            "missing_domains": missing_domains,
+        },
+        "migration": manifest_report,
+        "features": feature_report,
+        "findings": [asdict(item) for item in findings],
+    }
+    return result, 0 if status == "synchronized" else 1
+
+
+def is_probably_text(path: Path, max_bytes: int = 512_000) -> tuple[bool, str]:
+    try:
+        if path.stat().st_size > max_bytes:
+            return False, ""
+        data = path.read_bytes()
+    except (OSError, UnicodeError):
+        return False, ""
+    if b"\x00" in data[:8192]:
+        return False, ""
+    try:
+        return True, data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False, ""
+
+
+def tracked_and_untracked_files(root: Path) -> list[Path]:
+    try:
+        output = run_git(root, ["ls-files", "-co", "--exclude-standard", "-z"])
+        names = [name for name in output.split("\x00") if name]
+        return [root / name for name in names if (root / name).is_file()]
+    except DocCanonError:
+        result: list[Path] = []
+        for path in root.rglob("*"):
+            if path.is_file() and not any(part in EXCLUDED_PARTS for part in path.relative_to(root).parts):
+                result.append(path)
+        return result
+
+
+def document_score(path: Path, root: Path, text: str) -> tuple[int, list[str]]:
+    rel = path.relative_to(root).as_posix()
+    lower_name = rel.lower()
+    lower_sample = text[:80_000].lower()
+    signals: list[str] = []
+    score = 0
+    if path.suffix.lower() in DOC_EXTENSIONS:
+        score += 3
+        signals.append("documentation-like extension")
+    if re.search(r"(?m)^#{1,6}\s+\S", text):
+        score += 2
+        signals.append("structured headings")
+    name_hits = sorted(word for word in DOC_WORDS if word in lower_name)
+    content_hits = sorted(word for word in DOC_WORDS if re.search(rf"\b{re.escape(word)}\b", lower_sample))
+    if name_hits:
+        score += min(4, len(name_hits) * 2)
+        signals.append("name: " + ", ".join(name_hits[:4]))
+    if content_hits:
+        score += min(4, len(content_hits))
+        signals.append("content: " + ", ".join(content_hits[:4]))
+    if re.search(r"(?im)^(status|context|decision|consequences|requirements|architecture)\s*:", text):
+        score += 2
+        signals.append("governance fields")
+    return score, signals
+
+
+def inventory(root: Path, limit: int) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    config = load_config(root)
+    excluded = {CONFIG_NAME, DEFAULT_MIGRATION_MANIFEST}
+    if config and config.get("migration_manifest"):
+        excluded.add(str(config["migration_manifest"]))
+    for path in tracked_and_untracked_files(root):
+        relative = path.relative_to(root).as_posix()
+        if relative in excluded:
+            continue
+        rel_parts = path.relative_to(root).parts
+        if any(part in EXCLUDED_PARTS for part in rel_parts):
+            continue
+        readable, text = is_probably_text(path)
+        if not readable:
+            continue
+        score, signals = document_score(path, root, text)
+        if score < 3:
+            continue
+        stat = path.stat()
+        candidates.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "score": score,
+                "signals": signals,
+                "bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            }
+        )
+    candidates.sort(key=lambda item: (-item["score"], item["path"]))
+    return {
+        "project": str(root),
+        "candidate_count": len(candidates),
+        "truncated": len(candidates) > limit,
+        "candidates": candidates[:limit],
+        "instruction": "Classify candidates semantically; paths and scores are weak discovery signals only.",
+    }
+
+
+def initialize_migration_manifest(
+    root: Path,
+    manifest: str,
+    limit: int,
+    allow_feature_branch: bool = False,
+    allow_dirty: bool = False,
+) -> dict[str, Any]:
+    path = (root / manifest).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise DocCanonError("Migration manifest must be inside the project") from exc
+    if path.exists():
+        report = migration_manifest_status(root, manifest)
+        report["created"] = False
+        return report
+    config = load_config(root)
+    branch = branch_context(root, config)
+    if branch["kind"] == "feature" and not allow_feature_branch:
+        raise DocCanonError(
+            f"Refusing repository-wide migration on feature branch {branch['current_branch']}; "
+            "use the integration branch or pass --allow-feature-branch explicitly"
+        )
+    if branch["dirty"] and not allow_dirty:
+        raise DocCanonError("Refusing migration in a dirty worktree; isolate or finish existing work, or pass --allow-dirty explicitly")
+    scanned = inventory(root, limit)
+    if scanned["truncated"]:
+        raise DocCanonError("Inventory was truncated; rerun migrate scan with a larger --limit")
+    entries = [
+        {
+            "source": item["path"],
+            "classification": "unknown",
+            "target": None,
+            "action": "review",
+            "status": "unresolved",
+            "confidence": "low",
+            "evidence": item["signals"],
+            "conflicts": [],
+            "requires_review": True,
+        }
+        for item in scanned["candidates"]
+    ]
+    payload = {
+        "schema_version": 2,
+        "source_revision": git_head(root),
+        "candidate_count": scanned["candidate_count"],
+        "entries": entries,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    report = migration_manifest_status(root, manifest)
+    report["created"] = True
+    return report
+
+
+def tokens(value: str) -> set[str]:
+    return {
+        token.lower()
+        for token in WORD_RE.findall(value)
+        if len(token) > 1 and token.lower() not in CONTEXT_STOP_WORDS
+    }
+
+
+def code_references(root: Path, text: str) -> list[str]:
+    refs: set[str] = set()
+    for candidate in CODE_REF_RE.findall(text):
+        cleaned = candidate.strip().split("#", 1)[0]
+        if len(cleaned) > 240 or "\n" in cleaned:
+            continue
+        path = root / cleaned
+        if path.exists() and path.is_file():
+            refs.add(cleaned)
+    return sorted(refs)
+
+
+def markdown_sections(text: str) -> dict[str, str]:
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", text))
+    sections: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections[match.group(1).strip().lower()] = text[match.end():end].strip()
+    return sections
+
+
+def current_state_quality_problems(root: Path, text: str) -> list[str]:
+    body = text
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end >= 0:
+            body = text[end + 5:]
+    compact = re.sub(r"\s+", " ", body).strip()
+    problems: list[str] = []
+    if len(compact) < 160:
+        problems.append("body is too thin to be a substantive current-state contract")
+    if not code_references(root, text):
+        problems.append("body must reference at least one existing implementation file")
+    verification = markdown_sections(body).get("verification", "")
+    if not verification:
+        problems.append("missing Verification section")
+    elif not re.search(r"`[^`\n]+`|```", verification):
+        problems.append("Verification must contain a concrete command or executable scenario")
+    return problems
+
+
+def context_bundle(root: Path, intent: str, limit: int, include_historical: bool = False) -> dict[str, Any]:
+    config = load_config(root)
+    if config is None:
+        return {"status": "unconfigured", "documents": []}
+    if config["status"] == "disabled":
+        return {"status": "disabled", "documents": []}
+    query = tokens(intent)
+    ranked: list[dict[str, Any]] = []
+    excluded_historical = 0
+    authority_weight = {"current-state": 60, "human-confirmed": 45, "append-only": 25, "generated": 5}
+    for record in document_records(root, config):
+        path = record.path
+        text = path.read_text(encoding="utf-8", errors="replace")
+        rel = record.relative
+        authority = record.authority
+        if authority not in CONTEXT_AUTHORITIES and not include_historical:
+            excluded_historical += 1
+            continue
+        name_terms = tokens(rel)
+        heading_text = " ".join(re.findall(r"(?m)^#{1,6}\s+(.+)$", text))
+        heading_terms = tokens(heading_text)
+        body_terms = tokens(text[:120_000])
+        matched = sorted(query & body_terms)
+        relevance = len(query & name_terms) * 6 + len(query & heading_terms) * 3 + len(matched)
+        if rel == str(config.get("context_file", "CONTEXT.md")):
+            relevance += 2
+        score = relevance + authority_weight.get(authority, -25)
+        if relevance or not query:
+            ranked.append(
+                {
+                    "path": rel,
+                    "score": score,
+                    "authority": authority,
+                    "verified_at": record.verified_at,
+                    "domains": record.domains,
+                    "matched_terms": matched,
+                    "code_references": code_references(root, text),
+                }
+            )
+    ranked.sort(key=lambda item: (-item["score"], item["path"]))
+    check, _ = check_project(root, base=None, staged=False)
+    return {
+        "status": check["status"],
+        "intent": intent,
+        "query_terms": sorted(query),
+        "documents": ranked[:limit],
+        "excluded_historical_documents": excluded_historical,
+        "include_historical": include_historical,
+        "freshness_findings": check.get("findings", []),
+    }
+
+
+def update_frontmatter(path: Path, values: dict[str, Any]) -> None:
+    text = path.read_text(encoding="utf-8")
+    existing: dict[str, Any] = {}
+    body = text
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end >= 0:
+            existing = parse_simple_yaml(text[4:end])
+            body = text[end + 5 :]
+    existing.update(values)
+    lines = ["---"]
+    for key, value in existing.items():
+        if isinstance(value, list):
+            lines.append(f"{key}:")
+            lines.extend(f"  - {json.dumps(str(item), ensure_ascii=False)}" for item in value)
+        else:
+            lines.append(f"{key}: {value}")
+    lines.extend(["---", body.lstrip("\n")])
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def mark_verified(
+    root: Path,
+    document: str,
+    covers: list[str] | None,
+    domains: list[str] | None,
+    feature: str | None = None,
+) -> dict[str, Any]:
+    path = (root / document).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise DocCanonError("Document must be inside the project") from exc
+    if not path.is_file():
+        raise DocCanonError(f"Document not found: {document}")
+    if not covers:
+        raise DocCanonError("mark-verified requires at least one --covers pattern")
+    if not domains:
+        raise DocCanonError("mark-verified requires at least one --domain")
+    revision = git_head(root)
+    if not revision:
+        raise DocCanonError("mark-verified requires a Git commit")
+    values: dict[str, Any] = {
+        "doccanon_authority": "current-state",
+        "doccanon_verified_at": revision,
+    }
+    values["doccanon_covers"] = sorted(set(covers))
+    values["doccanon_domains"] = sorted(set(domains))
+    if feature:
+        values["doccanon_feature"] = feature
+    update_frontmatter(path, values)
+    return {
+        "status": "marked",
+        "document": document,
+        "verified_at": revision,
+        "covers": sorted(set(covers)),
+        "domains": sorted(set(domains)),
+        "feature": feature,
+    }
+
+
+def promote(
+    root: Path,
+    domains: list[str] | None,
+    manifest: str | None,
+    feature_manifest: str | None,
+) -> dict[str, Any]:
+    config = load_config(root)
+    if config is None or config["status"] != "enabled":
+        raise DocCanonError("promote requires an enabled DocCanon project")
+    required_domains = sorted(set(domains or []))
+    if not required_domains:
+        raise DocCanonError("promote requires at least one --domain")
+    records = document_records(root, config)
+    valid = [
+        record
+        for record in records
+        if record.authority == "current-state"
+        and record.covers
+        and record.domains
+        and record.verified_at
+        and revision_exists(root, record.verified_at)
+        and revision_is_ancestor(root, record.verified_at)
+        and not current_state_quality_problems(
+            root,
+            record.path.read_text(encoding="utf-8", errors="replace"),
+        )
+    ]
+    covered_domains = {domain for record in valid for domain in record.domains}
+    missing = sorted(set(required_domains) - covered_domains)
+    if not valid:
+        raise DocCanonError("No verified current-state documents exist")
+    if missing:
+        raise DocCanonError("Missing verified current-state owners for domains: " + ", ".join(missing))
+    if manifest:
+        report = migration_manifest_status(root, manifest)
+        if report["status"] != "complete":
+            raise DocCanonError(
+                f"Migration manifest is not complete: {report['unresolved_count']} unresolved, "
+                f"{report['mapped_count']}/{report['candidate_count']} mapped"
+            )
+    resolved_feature_manifest = feature_manifest
+    if "features" in required_domains:
+        resolved_feature_manifest = resolved_feature_manifest or DEFAULT_FEATURE_MANIFEST
+        feature_report = feature_manifest_status(root, resolved_feature_manifest)
+        if feature_report["status"] != "complete":
+            raise DocCanonError(
+                f"Feature library is not complete: {feature_report['documented_count']}/"
+                f"{feature_report['feature_count']} documented, {feature_report['unresolved_count']} unresolved"
+            )
+    config.update(
+        {
+            "schema_version": 3,
+            "maturity": "governed",
+            "required_domains": required_domains,
+            "migration_manifest": manifest,
+            "feature_manifest": resolved_feature_manifest,
+        }
+    )
+    write_config(root, config)
+    checked, _ = check_project(root, base=None, staged=False)
+    if checked["status"] != "synchronized":
+        config["maturity"] = "bootstrapping"
+        write_config(root, config)
+        raise DocCanonError("Promotion checks did not pass; project remains bootstrapping")
+    return {
+        "status": "governed",
+        "required_domains": required_domains,
+        "verified_documents": len(valid),
+        "migration_manifest": manifest,
+        "feature_manifest": resolved_feature_manifest,
+    }
+
+
+def preflight(root: Path, target: str | None) -> tuple[dict[str, Any], int]:
+    config = load_config(root)
+    if config is None or config["status"] != "enabled":
+        raise DocCanonError("preflight requires an enabled DocCanon project")
+    branch = branch_context(root, config, target)
+    base_ref = str(branch["base_ref"])
+    if not git_ref_exists(root, base_ref):
+        raise DocCanonError(f"Cannot resolve preflight target: {base_ref}")
+    checked, _ = check_project(root, base=base_ref, staged=False)
+    changed = changed_files(root, base=base_ref, staged=False)
+    affected: list[dict[str, Any]] = []
+    stale_features: list[str] = []
+    feature_manifest = str(config.get("feature_manifest", DEFAULT_FEATURE_MANIFEST))
+    manifest_path = root / feature_manifest
+    if manifest_path.is_file():
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for feature in payload.get("features", []):
+            if not isinstance(feature, dict) or feature.get("status") != "current":
+                continue
+            patterns = feature.get("code_patterns", [])
+            if isinstance(patterns, str):
+                patterns = [patterns]
+            code_changes = sorted(item for item in changed if match_any(item, [str(pattern) for pattern in patterns]))
+            if not code_changes:
+                continue
+            document = str(feature.get("document", ""))
+            updated = document in changed
+            identifier = str(feature.get("id", ""))
+            affected.append(
+                {
+                    "id": identifier,
+                    "document": document,
+                    "document_updated": updated,
+                    "changed_files": code_changes,
+                }
+            )
+            if not updated:
+                stale_features.append(identifier)
+    records = document_records(root, config)
+    changed_canonical_docs = sorted(
+        record.relative
+        for record in records
+        if record.relative in changed and record.authority in CONTEXT_AUTHORITIES
+    )
+    blockers: list[str] = []
+    if checked["status"] != "synchronized":
+        blockers.append("doccanon-check")
+    if stale_features:
+        blockers.append("stale-feature-docs")
+    if branch["dirty"]:
+        blockers.append("dirty-worktree")
+    if branch["behind"]:
+        blockers.append("behind-target")
+    status = "ready" if not blockers else "blocked"
+    result = {
+        "status": status,
+        "branch": branch,
+        "target": base_ref,
+        "changed_files": sorted(changed),
+        "affected_features": affected,
+        "stale_features": stale_features,
+        "blockers": blockers,
+        "changed_canonical_docs": changed_canonical_docs,
+        "doccanon_check": checked,
+    }
+    return result, 0 if status == "ready" else 1
+
+
+def documentation_impact(root: Path, target: str | None) -> dict[str, Any]:
+    config = load_config(root)
+    if config is None or config["status"] != "enabled":
+        raise DocCanonError("sync requires an enabled DocCanon project")
+    branch = branch_context(root, config, target)
+    base_ref = str(branch["base_ref"])
+    if not git_ref_exists(root, base_ref):
+        raise DocCanonError(f"Cannot resolve sync target: {base_ref}")
+    changed = changed_files(root, base=base_ref, staged=False)
+    docs_root = str(config.get("docs_root", "docs")).rstrip("/") + "/"
+    context_file = str(config.get("context_file", "CONTEXT.md"))
+    implementation_files = sorted(
+        path
+        for path in changed
+        if path != CONFIG_NAME and path != context_file and not path.startswith(docs_root)
+    )
+
+    feature_patterns: list[str] = []
+    affected_features: list[dict[str, Any]] = []
+    feature_manifest = str(config.get("feature_manifest", DEFAULT_FEATURE_MANIFEST))
+    feature_manifest_path = root / feature_manifest
+    if feature_manifest_path.is_file():
+        try:
+            feature_payload = json.loads(feature_manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise DocCanonError(f"Invalid feature manifest: {exc}") from exc
+        for feature in feature_payload.get("features", []):
+            if not isinstance(feature, dict) or feature.get("status") != "current":
+                continue
+            patterns = feature.get("code_patterns", [])
+            if isinstance(patterns, str):
+                patterns = [patterns]
+            patterns = [str(pattern) for pattern in patterns]
+            feature_patterns.extend(patterns)
+            matched = sorted(path for path in implementation_files if match_any(path, patterns))
+            if not matched:
+                continue
+            document = str(feature.get("document", ""))
+            affected_features.append(
+                {
+                    "id": str(feature.get("id", "")),
+                    "document": document,
+                    "document_updated": document in changed,
+                    "changed_files": matched,
+                }
+            )
+
+    current_owners: list[dict[str, Any]] = []
+    owner_patterns: list[str] = []
+    known_domains: set[str] = set()
+    for record in document_records(root, config):
+        if record.authority != "current-state" or not record.covers:
+            continue
+        known_domains.update(record.domains)
+        owner_patterns.extend(record.covers)
+        matched = sorted(path for path in implementation_files if match_any(path, record.covers))
+        if matched:
+            current_owners.append(
+                {
+                    "document": record.relative,
+                    "domains": record.domains,
+                    "document_updated": record.relative in changed,
+                    "changed_files": matched,
+                }
+            )
+
+    required = config.get("required_domains", [])
+    if isinstance(required, str):
+        required = [required]
+    review_domains = sorted(set(str(item) for item in required) | known_domains)
+    inferred_domains = sorted({domain for owner in current_owners for domain in owner["domains"]})
+    all_patterns = feature_patterns + owner_patterns
+    unmapped = sorted(path for path in implementation_files if not match_any(path, all_patterns))
+    stale_feature_docs = sorted(item["id"] for item in affected_features if not item["document_updated"])
+    stale_owner_docs = sorted(item["document"] for item in current_owners if not item["document_updated"])
+    changed_canonical_docs = sorted(
+        record.relative
+        for record in document_records(root, config)
+        if record.relative in changed and record.authority in CONTEXT_AUTHORITIES
+    )
+    return {
+        "status": "no-changes" if not changed else "review-required",
+        "branch": branch,
+        "target": base_ref,
+        "changed_files": sorted(changed),
+        "implementation_files": implementation_files,
+        "affected_features": affected_features,
+        "affected_current_state_owners": current_owners,
+        "inferred_domains": inferred_domains,
+        "review_domains": review_domains,
+        "unmapped_implementation_files": unmapped,
+        "stale_feature_docs": stale_feature_docs,
+        "stale_owner_docs": stale_owner_docs,
+        "changed_canonical_docs": changed_canonical_docs,
+    }
+
+
+def parse_review_receipts(values: list[str] | None, label: str) -> dict[str, str]:
+    receipts: dict[str, str] = {}
+    for value in values or []:
+        key, separator, reason = value.partition("=")
+        key = key.strip()
+        reason = reason.strip()
+        if not separator or not key or len(reason) < 8:
+            raise DocCanonError(f"{label} requires NAME=reason with a substantive reason")
+        receipts[key] = reason
+    return receipts
+
+
+def complete_sync(
+    root: Path,
+    target: str | None,
+    affected_domains: list[str] | None,
+    excluded_domains: list[str] | None,
+    excluded_files: list[str] | None,
+    title: str | None,
+    summary: str | None,
+    verification: list[str] | None,
+    skip_history: str | None,
+    release_version: str | None,
+    release_evidence: list[str] | None,
+    limitations: list[str] | None,
+) -> tuple[dict[str, Any], int]:
+    config = load_config(root)
+    if config is None or config["status"] != "enabled":
+        raise DocCanonError("sync complete requires an enabled DocCanon project")
+    if config.get("maturity", "bootstrapping") != "governed":
+        raise DocCanonError("sync complete requires a governed project; finish bootstrap first")
+    impact = documentation_impact(root, target)
+    domain_exclusions = parse_review_receipts(excluded_domains, "--exclude-domain")
+    file_exclusions = parse_review_receipts(excluded_files, "--exclude-file")
+    declared_domains = set(affected_domains or [])
+    inferred_domains = set(impact["inferred_domains"])
+    review_domains = set(impact["review_domains"])
+    affected = inferred_domains | declared_domains
+
+    blockers: list[dict[str, Any]] = []
+    for domain in sorted(review_domains):
+        if domain not in affected and domain not in domain_exclusions:
+            blockers.append({"code": "unreviewed-domain", "domain": domain})
+    for domain in sorted(set(domain_exclusions) & affected):
+        blockers.append({"code": "conflicting-domain-review", "domain": domain})
+
+    changed_docs = set(impact["changed_canonical_docs"])
+    records = document_records(root, config)
+    for domain in sorted(declared_domains):
+        owners = [record.relative for record in records if record.authority == "current-state" and domain in record.domains]
+        if not any(owner in changed_docs for owner in owners):
+            blockers.append({"code": "affected-domain-without-update", "domain": domain, "owners": owners})
+    for document in impact["stale_owner_docs"]:
+        blockers.append({"code": "stale-current-state-owner", "document": document})
+    for feature in impact["stale_feature_docs"]:
+        blockers.append({"code": "stale-feature-contract", "feature": feature})
+    for path in impact["unmapped_implementation_files"]:
+        if path not in file_exclusions:
+            blockers.append({"code": "unmapped-implementation-file", "file": path})
+    unknown_file_receipts = sorted(set(file_exclusions) - set(impact["unmapped_implementation_files"]))
+    for path in unknown_file_receipts:
+        blockers.append({"code": "unused-file-exclusion", "file": path})
+
+    if not verification:
+        blockers.append({"code": "missing-verification"})
+    if skip_history:
+        if len(skip_history.strip()) < 8:
+            blockers.append({"code": "weak-history-exclusion"})
+        if title or summary:
+            blockers.append({"code": "conflicting-history-decision"})
+    elif not title or not summary:
+        blockers.append({"code": "missing-development-record"})
+    if release_version and not release_evidence:
+        blockers.append({"code": "release-without-direct-evidence"})
+
+    checked, _ = check_project(root, base=impact["target"], staged=False)
+    if checked["status"] != "synchronized":
+        blockers.append({"code": "doccanon-check", "status": checked["status"]})
+    if blockers:
+        return {
+            "status": "blocked",
+            "impact": impact,
+            "blockers": blockers,
+            "doccanon_check": checked,
+        }, 1
+
+    impact_receipt = {
+        "affected_domains": sorted(affected),
+        "excluded_domains": domain_exclusions,
+        "excluded_unmapped_files": file_exclusions,
+        "changed_canonical_docs": impact["changed_canonical_docs"],
+    }
+    feature_ids = [item["id"] for item in impact["affected_features"]]
+    development_log = None
+    if not skip_history:
+        development_log = append_development_log(
+            root,
+            str(title),
+            str(summary),
+            feature_ids,
+            verification,
+            impact=impact_receipt,
+        )
+    release_log = None
+    if release_version:
+        release_log = write_release_log(
+            root,
+            release_version,
+            str(summary or title or f"Release {release_version}"),
+            feature_ids,
+            list(verification or []) + list(release_evidence or []),
+            limitations,
+        )
+    return {
+        "status": "synchronized",
+        "impact": impact,
+        "impact_receipt": impact_receipt,
+        "development_log": development_log,
+        "release_log": release_log,
+        "history_exclusion": skip_history,
+        "doccanon_check": checked,
+    }, 0
+
+
+def append_development_log(
+    root: Path,
+    title: str,
+    summary: str,
+    features: list[str] | None,
+    verification: list[str] | None,
+    impact: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config = load_config(root)
+    if config is None or config["status"] != "enabled":
+        raise DocCanonError("development log requires an enabled DocCanon project")
+    branch = branch_context(root, config)
+    record_payload = {
+        "kind": "development",
+        "title": title.strip(),
+        "summary": summary.strip(),
+        "features": sorted(features or []),
+        "verification": sorted(verification or []),
+        "impact": impact or {},
+        "branch": branch["current_branch"],
+        "base": branch["base_ref"],
+        "commit": branch["head"],
+    }
+    record_id = hashlib.sha256(
+        json.dumps(record_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    marker = f"<!-- doccanon-record: development:{record_id} -->"
+    timestamp = datetime.now(timezone.utc).replace(microsecond=0)
+    log_root = root / str(config.get("development_log_root", "docs/development"))
+    if log_root.exists():
+        for existing in sorted(log_root.glob("*.md")):
+            if marker in existing.read_text(encoding="utf-8"):
+                return {
+                    "status": "already-recorded",
+                    "kind": "development",
+                    "path": existing.relative_to(root).as_posix(),
+                    "record_id": record_id,
+                    "branch": branch,
+                }
+    path = log_root / f"{timestamp:%Y-%m}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(
+            "---\ndoccanon_authority: snapshot\ndoccanon_log: development\n---\n\n# Development log\n",
+            encoding="utf-8",
+        )
+    entry = [
+        "",
+        marker,
+        f"## {timestamp:%Y-%m-%d %H:%M UTC} — {title}",
+        "",
+        f"- Branch: `{branch['current_branch']}`",
+        f"- Base: `{branch['base_ref']}`",
+        f"- Commit: `{branch['head']}`",
+        "",
+        summary.strip(),
+    ]
+    if features:
+        entry.extend(["", "### Features", "", *[f"- `{item}`" for item in features]])
+    if verification:
+        entry.extend(["", "### Verification", "", *[f"- {item}" for item in verification]])
+    if impact:
+        entry.extend(["", "### Documentation impact", ""])
+        for domain in impact.get("affected_domains", []):
+            entry.append(f"- Affected domain: `{domain}`")
+        for document in impact.get("changed_canonical_docs", []):
+            entry.append(f"- Updated owner: `{document}`")
+        for domain, reason in impact.get("excluded_domains", {}).items():
+            entry.append(f"- Excluded domain `{domain}`: {reason}")
+        for excluded_path, reason in impact.get("excluded_unmapped_files", {}).items():
+            entry.append(f"- Excluded file `{excluded_path}`: {reason}")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(entry) + "\n")
+    return {
+        "status": "recorded",
+        "kind": "development",
+        "path": path.relative_to(root).as_posix(),
+        "record_id": record_id,
+        "branch": branch,
+    }
+
+
+def write_release_log(
+    root: Path,
+    version: str,
+    summary: str,
+    features: list[str] | None,
+    verification: list[str] | None,
+    limitations: list[str] | None,
+) -> dict[str, Any]:
+    config = load_config(root)
+    if config is None or config["status"] != "enabled":
+        raise DocCanonError("release log requires an enabled DocCanon project")
+    safe_version = re.sub(r"[^A-Za-z0-9._-]+", "-", version).strip("-")
+    if not safe_version:
+        raise DocCanonError("Release version must contain a safe filename character")
+    branch = branch_context(root, config)
+    record_payload = {
+        "kind": "release",
+        "version": version,
+        "summary": summary.strip(),
+        "features": sorted(features or []),
+        "verification": sorted(verification or []),
+        "limitations": sorted(limitations or []),
+        "branch": branch["current_branch"],
+        "commit": branch["head"],
+    }
+    record_id = hashlib.sha256(
+        json.dumps(record_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+    marker = f"<!-- doccanon-record: release:{record_id} -->"
+    log_root = root / str(config.get("release_log_root", "docs/releases"))
+    path = log_root / f"{safe_version}.md"
+    if path.exists():
+        if marker in path.read_text(encoding="utf-8"):
+            return {
+                "status": "already-recorded",
+                "kind": "release",
+                "path": path.relative_to(root).as_posix(),
+                "record_id": record_id,
+                "branch": branch,
+            }
+        raise DocCanonError(f"Release log already exists: {path.relative_to(root)}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "---",
+        "doccanon_authority: snapshot",
+        "doccanon_log: release",
+        f"doccanon_release: {json.dumps(version, ensure_ascii=False)}",
+        "---",
+        "",
+        marker,
+        f"# Release {version}",
+        "",
+        f"- Date: {datetime.now(timezone.utc):%Y-%m-%d}",
+        f"- Source branch: `{branch['current_branch']}`",
+        f"- Commit: `{branch['head']}`",
+        "",
+        "## Summary",
+        "",
+        summary.strip(),
+    ]
+    if features:
+        lines.extend(["", "## Features", "", *[f"- `{item}`" for item in features]])
+    if verification:
+        lines.extend(["", "## Verification", "", *[f"- {item}" for item in verification]])
+    if limitations:
+        lines.extend(["", "## Known limitations", "", *[f"- {item}" for item in limitations]])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {
+        "status": "recorded",
+        "kind": "release",
+        "path": path.relative_to(root).as_posix(),
+        "record_id": record_id,
+        "branch": branch,
+    }
+
+
+def hook_path(root: Path) -> Path:
+    git_dir = run_git(root, ["rev-parse", "--git-path", "hooks"])
+    path = Path(git_dir)
+    if not path.is_absolute():
+        path = root / path
+    return path / "pre-commit"
+
+
+def hook_block(root: Path) -> str:
+    helper = Path(__file__).resolve()
+    command = " ".join(
+        [
+            shlex.quote(sys.executable),
+            shlex.quote(str(helper)),
+            "--project",
+            shlex.quote(str(root)),
+            "check",
+            "--staged",
+        ]
+    )
+    return f"{MANAGED_HOOK_START}\n{command}\n{MANAGED_HOOK_END}"
+
+
+def manage_hook(root: Path, action: str) -> dict[str, Any]:
+    path = hook_path(root)
+    if action == "status":
+        installed = path.exists() and MANAGED_HOOK_START in path.read_text(encoding="utf-8", errors="replace")
+        return {"status": "installed" if installed else "not-installed", "path": str(path)}
+    if action == "uninstall":
+        if not path.exists():
+            return {"status": "not-installed", "path": str(path)}
+        text = path.read_text(encoding="utf-8")
+        pattern = re.compile(rf"\n?{re.escape(MANAGED_HOOK_START)}.*?{re.escape(MANAGED_HOOK_END)}\n?", re.S)
+        cleaned = pattern.sub("\n", text).strip()
+        if cleaned in {"", "#!/bin/sh", "#!/usr/bin/env sh"}:
+            path.unlink()
+        else:
+            path.write_text(cleaned + "\n", encoding="utf-8")
+        return {"status": "uninstalled", "path": str(path)}
+
+    checked, _ = check_project(root, base=None, staged=False)
+    if checked["status"] != "synchronized":
+        raise DocCanonError("Install the hook only after the project reaches governed, synchronized status")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = path.read_text(encoding="utf-8") if path.exists() else "#!/bin/sh\n"
+    block = hook_block(root)
+    if MANAGED_HOOK_START in existing:
+        pattern = re.compile(rf"{re.escape(MANAGED_HOOK_START)}.*?{re.escape(MANAGED_HOOK_END)}", re.S)
+        updated = pattern.sub(block, existing)
+    else:
+        updated = existing.rstrip() + "\n\n" + block + "\n"
+    path.write_text(updated, encoding="utf-8")
+    path.chmod(path.stat().st_mode | 0o111)
+    return {"status": "installed", "path": str(path)}
+
+
+def print_result(result: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    status = result.get("status", "ok")
+    print(f"DocCanon: {status}")
+    for key, value in result.items():
+        if key == "status":
+            continue
+        if key == "findings":
+            for item in value:
+                location = f" ({item.get('document')})" if item.get("document") else ""
+                print(f"- {item['level'].upper()} {item['code']}{location}: {item['message']}")
+            continue
+        if isinstance(value, (str, int)) or value is None:
+            print(f"{key}: {value}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="doccanon", description="DocCanon deterministic project helper")
+    parser.add_argument("--project", help="Project path; defaults to the current Git root")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    item = sub.add_parser("status")
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("enable")
+    item.add_argument("--allow-feature-branch", action="store_true")
+    item.add_argument("--allow-dirty", action="store_true")
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("disable")
+    item.add_argument("--reason", default="user-requested")
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("check")
+    item.add_argument("--base")
+    item.add_argument("--staged", action="store_true")
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("inventory", aliases=["migrate-scan"])
+    item.add_argument("--limit", type=int, default=500)
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("context")
+    item.add_argument("--intent", required=True)
+    item.add_argument("--limit", type=int, default=8)
+    item.add_argument("--include-historical", action="store_true")
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("mark-verified")
+    item.add_argument("document")
+    item.add_argument("--covers", action="append")
+    item.add_argument("--domain", action="append")
+    item.add_argument("--feature")
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("promote")
+    item.add_argument("--domain", action="append", required=True)
+    item.add_argument("--manifest")
+    item.add_argument("--feature-manifest")
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("features")
+    feature_sub = item.add_subparsers(dest="feature_action", required=True)
+    feature_status = feature_sub.add_parser("status")
+    feature_status.add_argument("--manifest", default=DEFAULT_FEATURE_MANIFEST)
+    feature_status.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("migrate")
+    migrate_sub = item.add_subparsers(dest="migrate_action", required=True)
+    migrate_scan = migrate_sub.add_parser("scan")
+    migrate_scan.add_argument("--manifest", default=DEFAULT_MIGRATION_MANIFEST)
+    migrate_scan.add_argument("--limit", type=int, default=5000)
+    migrate_scan.add_argument("--allow-feature-branch", action="store_true")
+    migrate_scan.add_argument("--allow-dirty", action="store_true")
+    migrate_scan.add_argument("--json", action="store_true")
+    migrate_status = migrate_sub.add_parser("status")
+    migrate_status.add_argument("--manifest", default=DEFAULT_MIGRATION_MANIFEST)
+    migrate_status.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("hook")
+    item.add_argument("action", choices=["install", "uninstall", "status"])
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("branch")
+    branch_sub = item.add_subparsers(dest="branch_action", required=True)
+    branch_status = branch_sub.add_parser("status")
+    branch_status.add_argument("--target")
+    branch_status.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("preflight")
+    item.add_argument("--target")
+    item.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("sync")
+    sync_sub = item.add_subparsers(dest="sync_action", required=True)
+    sync_plan = sync_sub.add_parser("plan")
+    sync_plan.add_argument("--target")
+    sync_plan.add_argument("--json", action="store_true")
+    sync_complete = sync_sub.add_parser("complete")
+    sync_complete.add_argument("--target")
+    sync_complete.add_argument("--domain", action="append")
+    sync_complete.add_argument("--exclude-domain", action="append")
+    sync_complete.add_argument("--exclude-file", action="append")
+    sync_complete.add_argument("--title")
+    sync_complete.add_argument("--summary")
+    sync_complete.add_argument("--verification", action="append")
+    sync_complete.add_argument("--skip-history")
+    sync_complete.add_argument("--release-version")
+    sync_complete.add_argument("--release-evidence", action="append")
+    sync_complete.add_argument("--limitation", action="append")
+    sync_complete.add_argument("--json", action="store_true")
+
+    item = sub.add_parser("log")
+    log_sub = item.add_subparsers(dest="log_action", required=True)
+    development_log = log_sub.add_parser("development")
+    development_log.add_argument("--title", required=True)
+    development_log.add_argument("--summary", required=True)
+    development_log.add_argument("--feature", action="append")
+    development_log.add_argument("--verification", action="append")
+    development_log.add_argument("--json", action="store_true")
+    release_log = log_sub.add_parser("release")
+    release_log.add_argument("--version", required=True)
+    release_log.add_argument("--summary", required=True)
+    release_log.add_argument("--feature", action="append")
+    release_log.add_argument("--verification", action="append")
+    release_log.add_argument("--limitation", action="append")
+    release_log.add_argument("--json", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    root = project_root(args.project)
+    try:
+        if args.command == "enable":
+            result = enable(root, args.allow_feature_branch, args.allow_dirty)
+            exit_code = 0
+        elif args.command == "disable":
+            result, exit_code = disable(root, args.reason), 0
+        elif args.command == "status":
+            config = load_config(root)
+            result = {
+                "status": config["status"] if config else "unconfigured",
+                "project": str(root),
+                "config": config,
+                "head": git_head(root),
+                "branch": branch_context(root, config),
+            }
+            exit_code = 0
+        elif args.command == "check":
+            result, exit_code = check_project(root, args.base, args.staged)
+        elif args.command in {"inventory", "migrate-scan"}:
+            result, exit_code = inventory(root, args.limit), 0
+            result["status"] = "scanned"
+        elif args.command == "context":
+            result = context_bundle(root, args.intent, args.limit, args.include_historical)
+            exit_code = 0 if result["status"] == "synchronized" else 1
+        elif args.command == "mark-verified":
+            result, exit_code = mark_verified(root, args.document, args.covers, args.domain, args.feature), 0
+        elif args.command == "promote":
+            result, exit_code = promote(root, args.domain, args.manifest, args.feature_manifest), 0
+        elif args.command == "features":
+            result = feature_manifest_status(root, args.manifest)
+            exit_code = 0 if result["status"] == "complete" else 1
+        elif args.command == "migrate":
+            if args.migrate_action == "scan":
+                result = initialize_migration_manifest(
+                    root,
+                    args.manifest,
+                    args.limit,
+                    args.allow_feature_branch,
+                    args.allow_dirty,
+                )
+                exit_code = 0
+            else:
+                result = migration_manifest_status(root, args.manifest)
+                exit_code = 0 if result["status"] == "complete" else 1
+        elif args.command == "hook":
+            result, exit_code = manage_hook(root, args.action), 0
+        elif args.command == "branch":
+            result = branch_context(root, load_config(root), args.target)
+            result["status"] = "ok"
+            exit_code = 0
+        elif args.command == "preflight":
+            result, exit_code = preflight(root, args.target)
+        elif args.command == "sync":
+            if args.sync_action == "plan":
+                result = documentation_impact(root, args.target)
+                exit_code = 0
+            else:
+                result, exit_code = complete_sync(
+                    root,
+                    args.target,
+                    args.domain,
+                    args.exclude_domain,
+                    args.exclude_file,
+                    args.title,
+                    args.summary,
+                    args.verification,
+                    args.skip_history,
+                    args.release_version,
+                    args.release_evidence,
+                    args.limitation,
+                )
+        elif args.command == "log":
+            if args.log_action == "development":
+                result = append_development_log(root, args.title, args.summary, args.feature, args.verification)
+            else:
+                result = write_release_log(
+                    root,
+                    args.version,
+                    args.summary,
+                    args.feature,
+                    args.verification,
+                    args.limitation,
+                )
+            exit_code = 0
+        else:
+            raise DocCanonError(f"Unsupported command: {args.command}")
+        print_result(result, getattr(args, "json", False))
+        return exit_code
+    except DocCanonError as exc:
+        result = {"status": "error", "error": str(exc), "project": str(root)}
+        print_result(result, getattr(args, "json", False))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
