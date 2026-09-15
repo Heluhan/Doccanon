@@ -1,412 +1,244 @@
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 # DocCanon
 
 ### Stop making every coding agent rediscover your codebase.
 
 **DocCanon is a verified context layer for coding agents.**
 
-It turns durable codebase knowledge into a small, project-local source of truth that agents can reuse across tasks and tools — instead of repeatedly scanning the repository and rebuilding the same understanding from scratch.
+It keeps a compact, trustworthy understanding of your project beside the code, so coding agents can reuse the same context instead of repeatedly scanning and re-interpreting the repository from scratch.
 
-```text
-Without DocCanon
+**Reuse context. Keep it fresh. Switch agents.**
 
-New task
-   ↓
-Explore repository
-   ↓
-Find relevant files
-   ↓
-Reconstruct architecture
-   ↓
-Infer how the system works
-   ↓
-Start the actual task
+---
 
+## Quick Start
 
-With DocCanon
+Install DocCanon into your current project:
 
-New task
-   ↓
-Load verified project context
-   ↓
-Inspect relevant code
-   ↓
-Start the actual task
+```bash
+gh skill install Heluhan/Doccanon doccanon --agent universal
 ```
 
-**Less repeated context. Less drift. Less agent lock-in.**
+Then tell your coding agent:
 
-DocCanon keeps canonical knowledge beside your code, checks whether it is still trustworthy on the current branch, routes agents to only the context relevant to the task, and requires affected documentation to move with the implementation.
+> **Set up DocCanon for this project.**
 
-> **Read the map first. Verify against the territory.**
+That's it.
 
-[GitHub](https://github.com/Heluhan/Doccanon) · [Security contact](mailto:contact@planana.xyz)
+Once configured, use your coding agent normally. DocCanon handles context routing, verification, and documentation synchronization as part of the workflow.
+
+> `gh skill` is currently a GitHub CLI preview feature. For host-specific or manual installation, see [Installation](#installation).
 
 ---
 
 ## Why DocCanon?
 
-Coding agents are getting better at reading large repositories.
+### 1. Stop rediscovering the same codebase
 
-But we keep making them solve the same problem again and again.
+A new task often starts with the same expensive routine:
 
-A new session starts. A new agent joins. You switch from Codex to Claude Code, Cursor, OpenCode, Copilot, or Gemini. The agent searches the repository, reads entry points, traces dependencies, reconstructs architecture, and builds a temporary mental model of the project.
+```text
+Task
+  ↓
+Search the repository
+  ↓
+Read entry points
+  ↓
+Trace dependencies
+  ↓
+Reconstruct architecture
+  ↓
+Find the relevant code
+  ↓
+Start working
+```
 
-Much of that understanding already existed in the previous session.
+Much of that understanding is durable. It should not have to be rebuilt for every task or every new agent session.
 
-It just was not reusable.
+DocCanon gives the agent a compact project map first:
 
-DocCanon makes that understanding part of the project.
+```text
+Task
+  ↓
+Load relevant project context
+  ↓
+Inspect relevant code
+  ↓
+Start working
+```
 
-### Reuse codebase understanding
+The agent still verifies the source code where needed.
 
-Stable knowledge about your system should not have to be rediscovered from raw code for every task.
+It just does not have to treat the entire repository as unknown territory every time.
 
-DocCanon maintains a compact canonical knowledge layer so an agent can first understand:
+This is designed to reduce repeated repository exploration — and therefore the context, tool calls, and time spent getting oriented.
 
-* what the system does,
-* where responsibilities live,
-* which invariants matter,
-* which features and domains are affected,
-* and where to verify the relevant implementation.
+Actual token savings depend on the repository, task, model, and agent, so DocCanon does not claim a universal percentage.
 
-The agent still reads code when code is needed.
+---
 
-It just does not need to begin every task by treating the entire repository as unknown territory.
+### 2. Switch agents without losing project context
 
-### Share context across agents
+Your project's understanding should belong to the **project**, not to one model, IDE, or session.
 
-Your project's memory should belong to the project — not to one model, session, or coding tool.
-
-DocCanon stores canonical knowledge in plain Markdown inside the repository:
+DocCanon keeps canonical knowledge in plain Markdown beside the code:
 
 ```text
 CONTEXT.md
 docs/
 ```
 
-That means different coding agents can work from the same project understanding.
+Different coding agents can work from the same project understanding:
 
 ```text
 Codex ──────────┐
 Claude Code ────┤
-Cursor ─────────┼──→ Canonical project context ──→ Code
+Cursor ─────────┼──→ Project context ──→ Codebase
 OpenCode ───────┤
 Copilot ────────┤
 Gemini CLI ─────┘
 ```
 
-Switch agents without rebuilding the project's context from zero.
+Use one agent today and another tomorrow without rebuilding the project's mental model from zero.
 
-### Keep reusable context from becoming stale
+**Switch agents, not context.**
 
-Reusable context is only useful if it is trustworthy.
+---
 
-A normal README, `AGENTS.md`, `CLAUDE.md`, rules file, or architecture document can silently drift away from the implementation.
+### 3. Don't let shared context silently go stale
 
-DocCanon treats that as a first-class problem.
+Persistent context creates a new problem:
 
-Before canonical project knowledge is trusted, DocCanon checks its branch-relative freshness. After implementation changes, it determines which current-state owners are affected and refuses to call the project synchronized while relevant implementation changes remain unaccounted for.
+**What happens when the code changes but the documentation doesn't?**
+
+A stale project map can be worse than no map at all.
+
+DocCanon treats freshness as part of the system.
+
+It checks whether canonical project knowledge is valid for the current branch, tracks which current-state owners are affected by implementation changes, and refuses to treat the project as synchronized while relevant changes remain unaccounted for.
+
+```text
+Code changes
+     ↓
+Affected project knowledge?
+     ↓
+   yes
+     ↓
+Update + verify
+     ↓
+Synchronized
+```
 
 So DocCanon is not just persistent context.
 
-It is **governed persistent context**.
+It is **governed, verifiable context**.
 
 ---
 
-## The core loop
+## How it works
 
-For substantive work in a governed project, DocCanon gives the agent a repeatable workflow:
+For a governed project, the basic loop is:
 
-```text
-                  ┌─────────────────────┐
-                  │   New coding task   │
-                  └──────────┬──────────┘
-                             ↓
-                  ┌─────────────────────┐
-                  │ Check context trust │
-                  │ on current branch   │
-                  └──────────┬──────────┘
-                             ↓
-                  ┌─────────────────────┐
-                  │ Load the smallest   │
-                  │ relevant context    │
-                  └──────────┬──────────┘
-                             ↓
-                  ┌─────────────────────┐
-                  │ Verify / inspect    │
-                  │ relevant code       │
-                  └──────────┬──────────┘
-                             ↓
-                  ┌─────────────────────┐
-                  │ Implement change    │
-                  └──────────┬──────────┘
-                             ↓
-                  ┌─────────────────────┐
-                  │ Update affected     │
-                  │ canonical owners    │
-                  └──────────┬──────────┘
-                             ↓
-                  ┌─────────────────────┐
-                  │ Verify code + docs  │
-                  │ together            │
-                  └─────────────────────┘
-```
+1. **Check trust** — verify that canonical context is usable on the current branch.
+2. **Route context** — load only the project knowledge relevant to the task.
+3. **Verify code** — inspect the source, tests, configuration, or runtime evidence needed for the change.
+4. **Implement** — make the actual code change.
+5. **Keep context aligned** — update affected current-state knowledge and verify the result.
 
-The user does not need to remember this workflow.
+The user does not need to run this workflow manually.
 
 The skill owns it.
 
----
-
-## A concrete example
-
-Imagine an agent spends time discovering that:
-
-* session recovery is owned by a particular service,
-* authentication state crosses two specific boundaries,
-* refresh tokens must never be written through a certain path,
-* failures follow an established recovery state machine,
-* and several tests define the expected behavior.
-
-Tomorrow, another agent receives:
-
-> Add a new session recovery path.
-
-Without durable project context, that agent may search through the same repository and reconstruct much of the same understanding again.
-
-With DocCanon, the agent first receives the relevant canonical feature and architecture context, then inspects the implementation needed to verify and make the change.
-
-Afterward, DocCanon checks whether the implementation affected any governed feature or cross-cutting contract and requires those owners to remain aligned.
-
-The expensive part — understanding the shape of the system — becomes reusable.
+```text
+New task
+   ↓
+Verified context
+   ↓
+Relevant code
+   ↓
+Implementation
+   ↓
+Context update
+   ↓
+Verification
+```
 
 ---
 
 ## Why not just use `AGENTS.md`, `CLAUDE.md`, or normal docs?
 
-Those files can be useful. DocCanon solves a different problem.
+Those files are useful. DocCanon solves a different problem.
 
-| Approach                          | Persistent | Cross-agent | Task-routed | Freshness checked | Change coverage |
-| --------------------------------- | :--------: | :---------: | :---------: | :---------------: | :-------------: |
-| Agent scans repository            |      ✗     |      ✓      |      —      |         ✓         |        —        |
-| Session / provider memory         |      ✓     |      ✗      |    varies   |         ✗         |        ✗        |
-| `CLAUDE.md` / tool-specific rules |      ✓     |      ✗      |   limited   |         ✗         |        ✗        |
-| Ordinary project docs             |      ✓     |      ✓      |   limited   |     usually ✗     |    usually ✗    |
-| **DocCanon**                      |    **✓**   |    **✓**    |    **✓**    |       **✓**       |      **✓**      |
+A normal project document can persist knowledge, but it can also silently become stale.
 
-DocCanon does not try to replace code inspection.
+A tool-specific memory file can help one agent, but the knowledge may not travel cleanly to another.
+
+And asking every agent to reconstruct the project directly from source works — but repeats the same exploration again and again.
+
+DocCanon adds three things:
+
+* **Portable context** — project knowledge lives with the repository.
+* **Task routing** — agents load the smallest relevant context before inspecting code.
+* **Verification** — reusable context is checked against the implementation instead of being trusted blindly.
+
+DocCanon does **not** replace source-code inspection.
 
 It changes where the agent starts.
 
-Instead of:
-
-> **raw repository → reconstruct project model → work**
-
-the intended path becomes:
-
-> **canonical project model → targeted verification → work**
+> **Read the map first. Verify against the territory.**
 
 ---
 
-## Project knowledge that lives with the code
+## Try the failure mode
 
-DocCanon keeps durable knowledge in the repository itself.
-
-`CONTEXT.md` owns confirmed terminology and domain boundaries.
-
-`docs/` holds current-state knowledge such as feature contracts, architecture, product behavior, operations, decisions, and other durable project knowledge.
-
-Current-state documents describe what is true **now**.
-
-Historical logs, plans, drafts, session notes, and superseded documentation are not allowed to silently become current authority.
-
-One fact should have one canonical owner.
-
----
-
-## Trust before retrieval
-
-Having documentation does not mean the documentation is trustworthy.
-
-DocCanon distinguishes between a project that has merely enabled the skill and a project whose canonical knowledge has actually passed its trust requirements.
-
-A project can be:
-
-```text
-enabled
-   ↓
-bootstrapping
-   ↓
-governed
-```
-
-A governed project has verified current-state owners for applicable knowledge domains and completed migration requirements where relevant.
-
-Only then can canonical context safely substitute for broad repository exploration.
-
-Likewise:
-
-> **enabled ≠ governed**
-> **indexed ≠ fresh**
-> **clean ≠ synchronized**
-
-DocCanon only claims synchronization when its branch-relative checks actually pass.
-
----
-
-## Branch-aware truth
-
-Codebase truth is branch-relative.
-
-A feature document updated on a feature branch may accurately describe that branch while being wrong for `main`.
-
-DocCanon therefore ties freshness to Git history and requires verified revisions to be reachable from the current branch.
-
-Affected code and canonical documentation stay together in the same branch and PR.
-
-DocCanon observes Git state, but it does not create, switch, reset, merge, delete, stash, or push branches without explicit authorization.
-
----
-
-## Change coverage
-
-One of the easiest ways for documentation systems to fail is simple:
-
-the implementation changes, but nobody realizes which documents also became stale.
-
-DocCanon treats every changed implementation file as review-required.
-
-After a substantive change, it builds an impact plan that asks:
-
-```text
-Which feature owns this change?
-
-Which current-state contracts are affected?
-
-Did this change introduce a new capability?
-
-Are any governed domains affected?
-
-Is any changed implementation file still unaccounted for?
-```
-
-Each relevant change must either map to a canonical owner or receive a concrete evidence-backed exclusion.
-
-DocCanon refuses completion while required owners are stale, governed domains remain unreviewed, implementation files remain unexplained, or verification is missing.
-
----
-
-## Brownfield projects
-
-DocCanon is designed for existing repositories, not only greenfield projects.
-
-Existing documentation is not automatically trusted just because it already exists.
-
-During migration, DocCanon reviews candidate knowledge sources and decides whether their useful claims should be:
-
-* adopted,
-* merged,
-* moved,
-* split,
-* superseded,
-* rejected as stale,
-* preserved only as history,
-* or excluded as irrelevant.
-
-Implementation behavior is checked against code, tests, schemas, configuration, Git evidence, or runtime evidence where appropriate.
-
-Human intent is different.
-
-DocCanon will not invent product intent, rationale, or historical decisions merely because the current code appears to imply them.
-
-After migration, normal work should be possible from the canonical library without repeatedly reopening legacy documentation.
-
----
-
-## Token efficiency
-
-DocCanon is designed to reduce **repeated repository exploration**.
-
-Instead of broadly searching the codebase before every task, the agent first receives a small relevant canonical bundle and then performs targeted code verification.
-
-Conceptually:
-
-```text
-Broad exploration
-
-Task
- ↓
-large repository search
- ↓
-many files
- ↓
-reconstruct context
- ↓
-target code
-
-
-DocCanon routing
-
-Task
- ↓
-small canonical context
- ↓
-target code
-```
-
-This can reduce the amount of context an agent needs to consume on many brownfield tasks.
-
-But DocCanon does **not** claim a universal token-savings percentage.
-
-Token use depends on repository shape, task type, model, agent implementation, cache behavior, and documentation quality.
-
-You can measure the context-volume mechanism locally:
+Want to see the trust boundary directly?
 
 ```bash
-python3 /path/to/doccanon/skills/doccanon/scripts/measure_context.py \
-  --project . \
-  --intent "change session recovery" \
-  --baseline tracked-code \
-  --json
+git clone https://github.com/Heluhan/Doccanon.git
+cd Doccanon
+python3 scripts/demo.py
 ```
 
-This is a **context-reduction proxy**, not observed model token usage or cost.
-
-For publishable token claims, use the paired control/treatment protocol in [`skills/doccanon/references/token-benchmark.md`](skills/doccanon/references/token-benchmark.md) and summarize provider-reported usage with:
-
-```bash
-python3 scripts/summarize_token_benchmark.py benchmarks/runs.csv --json
-```
-
-Until controlled results exist, the accurate claim is:
-
-> **DocCanon routes coding agents to a small, fresh canonical context before targeted code verification.**
+The demo creates a disposable Git repository, establishes a governed baseline, changes covered code without updating its canonical owner, and shows DocCanon refusing to treat the stale state as synchronized.
 
 ---
 
-## Install
-
-DocCanon is an Agent Skills-compatible directory.
-
-It requires:
-
-* Git
-* Python 3.10+
-
-There is no runtime service, API key, vector database, or model dependency.
+## Installation
 
 ### GitHub CLI
 
-With GitHub CLI 2.90 or later:
+For agents that use the shared project skill directory:
+
+```bash
+gh skill install Heluhan/Doccanon doccanon --agent universal
+```
+
+You can also install for a specific host:
+
+```bash
+# Codex
+gh skill install Heluhan/Doccanon doccanon --agent codex
+
+# Claude Code
+gh skill install Heluhan/Doccanon doccanon --agent claude-code
+
+# Cursor
+gh skill install Heluhan/Doccanon doccanon --agent cursor
+
+# OpenCode
+gh skill install Heluhan/Doccanon doccanon --agent opencode
+```
+
+Preview the skill before installing:
 
 ```bash
 gh skill preview Heluhan/Doccanon doccanon
-gh skill install Heluhan/Doccanon doccanon
 ```
 
-### Project install
+### Manual install
 
-For a portable project-level install:
+DocCanon also ships with its own installer:
 
 ```bash
 git clone https://github.com/Heluhan/Doccanon.git
@@ -418,207 +250,72 @@ python3 install.py \
   --project /path/to/project
 ```
 
-The universal project target installs:
+DocCanon has no runtime service, API key, vector database, or model dependency.
 
-```text
-.agents/skills/doccanon
-```
+The helper requires **Git** and **Python 3.10+**.
 
-This location is recognized by Codex, GitHub Copilot, Gemini CLI, and OpenCode.
-
-For host-specific placement:
-
-```bash
-python3 install.py --agent codex --scope user
-python3 install.py --agent claude --scope user
-python3 install.py --agent copilot --scope project --project /path/to/project
-python3 install.py --agent gemini --scope user
-python3 install.py --agent opencode --scope user
-python3 install.py --agent cline --scope user
-python3 install.py --agent cursor --scope project --project /path/to/project
-```
-
-See the full [agent compatibility matrix](docs/agent-compatibility.md).
-
-You can install for multiple hosts by repeating `--agent`, or use:
-
-```bash
-python3 install.py --agent all --scope project --project /path/to/project
-```
-
-Preview any installation before writing:
-
-```bash
-python3 install.py --dry-run ...
-```
-
-The installer does not overwrite unmanaged existing skill directories. Updates preserve a versioned `doccanon.previous-*` copy for review.
-
-Start or refresh the coding-agent session after installation so the host can discover the skill.
+See the full [agent compatibility matrix](docs/agent-compatibility.md) for host-specific placement and discovery details.
 
 ---
 
-## Quick start
+## Supported agents
 
-After installation, open your coding agent and say:
+DocCanon includes installation targets for:
 
-> **Set up DocCanon for this project.**
+* Codex
+* Claude Code
+* Cursor
+* GitHub Copilot
+* Gemini CLI
+* OpenCode
+* Cline
 
-That is the only DocCanon-specific workflow the user needs to learn.
-
-For an unconfigured substantive repository, DocCanon asks before enabling governance.
-
-It recommends staying disabled for disposable prototypes, scratch projects, isolated snippets, and other cases where maintaining durable project knowledge would cost more than it saves.
-
-For an existing project, initialization does more than generate files.
-
-DocCanon inventories the implemented system, reconstructs shipped capabilities, establishes current-state owners, verifies them against implementation evidence, and promotes the project to governed status only after the trust gate passes.
-
-After that, use your coding agent normally.
+Host discovery and activation behavior varies. The canonical project knowledge itself remains local to the repository and portable across supported hosts.
 
 ---
 
-## Try the failure mode
+## Token efficiency
 
-Want to see why the trust boundary exists before installing anything?
+DocCanon is designed around a simple idea:
 
-Run:
+> **Don't repeatedly spend context rediscovering knowledge the project already knows.**
+
+Instead of broad repository exploration before every task, DocCanon routes the agent to a small, fresh canonical bundle followed by targeted code verification.
+
+You can measure the context-volume mechanism locally:
 
 ```bash
-python3 scripts/demo.py
+python3 /path/to/doccanon/skills/doccanon/scripts/measure_context.py \
+  --project . \
+  --intent "change session recovery" \
+  --baseline tracked-code \
+  --json
 ```
 
-The demo creates a disposable Git repository, establishes a governed baseline, changes covered code without updating its canonical owner, and demonstrates DocCanon refusing to treat the resulting state as synchronized.
+This is a context-reduction proxy, not observed model token usage or cost.
 
----
-
-## Agent compatibility
-
-| Agent          | Project support                                          | User support                         |
-| -------------- | -------------------------------------------------------- | ------------------------------------ |
-| Codex          | `.agents/skills/doccanon`                                | `~/.codex/skills/doccanon`           |
-| GitHub Copilot | `.agents/skills/doccanon` or `.github/skills/doccanon`   | `~/.copilot/skills/doccanon`         |
-| Gemini CLI     | `.agents/skills/doccanon` or `.gemini/skills/doccanon`   | `~/.gemini/skills/doccanon`          |
-| OpenCode       | `.agents/skills/doccanon` or `.opencode/skills/doccanon` | `~/.config/opencode/skills/doccanon` |
-| Claude Code    | `.claude/skills/doccanon`                                | `~/.claude/skills/doccanon`          |
-| Cline          | `.cline/skills/doccanon`                                 | `~/.cline/skills/doccanon`           |
-| Cursor         | `.agents/skills/doccanon` + rule adapter                 | —                                    |
-
-Host discovery and activation behavior belongs to the host. DocCanon's deterministic helper behaves consistently across supported placements.
+For controlled measurements, see the [token benchmark protocol](skills/doccanon/references/token-benchmark.md).
 
 ---
 
 ## What DocCanon is not
 
-DocCanon is not:
-
-* a replacement for source code,
-* a codebase RAG service,
-* a vector database,
-* a transcript or session-memory store,
-* a Git branch manager,
-* a spec generator,
-* an excuse to document every implementation detail,
-* or an authority that invents product decisions from code.
+DocCanon is not a replacement for source code, a vector database, or a codebase RAG service.
 
 Code, tests, schemas, configuration, and direct runtime evidence remain the final proof of implementation behavior.
 
-DocCanon gives agents a better starting point and keeps that starting point accountable to the implementation.
+DocCanon gives agents a better starting point — and keeps that starting point accountable to the code.
 
 ---
 
-## Deterministic helper
+## Learn more
 
-The skill uses:
-
-```text
-skills/doccanon/scripts/doccanon.py
-```
-
-internally.
-
-Useful diagnostics include:
-
-```bash
-python3 skills/doccanon/scripts/doccanon.py \
-  --project /path/to/repo status --json
-
-python3 skills/doccanon/scripts/doccanon.py \
-  --project /path/to/repo check --json
-
-python3 skills/doccanon/scripts/doccanon.py \
-  --project /path/to/repo context \
-  --intent "add session recovery" \
-  --json
-
-python3 skills/doccanon/scripts/doccanon.py \
-  --project /path/to/repo sync plan --json
-
-python3 skills/doccanon/scripts/doccanon.py \
-  --project /path/to/repo preflight \
-  --target main \
-  --json
-```
-
-The agent — not the user — owns the full:
-
-```text
-sync plan
-   ↓
-semantic documentation update
-   ↓
-verification
-   ↓
-sync complete
-```
-
-workflow.
-
-Read-only checks and Git hooks never mutate project documentation.
-
----
-
-## Design principles
-
-### Project memory belongs to the project
-
-Canonical knowledge should survive model changes, agent changes, sessions, and tooling choices.
-
-### Context should be smaller than the codebase
-
-Agents should begin with compressed project understanding, then inspect source code where evidence is required.
-
-### Persistent context must be verifiable
-
-Making stale knowledge easier to retrieve makes the problem worse, not better.
-
-### Code proves mechanics; humans own intent
-
-Implementation can establish what the system currently does. It cannot reliably establish why a product decision was made or what a human intended.
-
-### Documentation changes with implementation
-
-Canonical current-state knowledge is part of the change surface, not a cleanup task for later.
-
----
-
-## Development
-
-Run the local test suite:
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-Validate the skill:
-
-```bash
-python3 /path/to/skill-creator/scripts/quick_validate.py skills/doccanon
-```
-
-Contributions should preserve the boundary between deterministic repository facts and semantic agent judgment.
-
-Security reports can be sent to [contact@planana.xyz](mailto:contact@planana.xyz).
+* [简体中文 README](README.zh-CN.md)
+* [Agent compatibility](docs/agent-compatibility.md)
+* [DocCanon skill specification](skills/doccanon/SKILL.md)
+* [Token benchmark protocol](skills/doccanon/references/token-benchmark.md)
+* [Contributing](CONTRIBUTING.md)
+* [Security](SECURITY.md)
 
 ---
 
