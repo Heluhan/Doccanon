@@ -4,8 +4,6 @@
 
 ### 别再让每个 Coding Agent 从头理解你的代码库。
 
-![DocCanon 使用演示：受治理项目的上下文校验为 synchronized；随后 src/session.py 变更但 docs/architecture.md 未同步更新，check 报告 stale 并指出受影响的文档与文件](assets/doccanon-demo.gif)
-
 **DocCanon 是为 Coding Agent 提供的可验证上下文层。**
 
 它把项目中稳定、重要的知识沉淀在代码库里，让不同 Coding Agent 可以复用同一份项目上下文，而不是每次接到新任务，都重新扫描仓库、重新理解架构、重新建立项目认知。

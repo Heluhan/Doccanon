@@ -4,8 +4,6 @@
 
 ### Stop making every coding agent rediscover your codebase.
 
-![A paced DocCanon walkthrough: a governed project checks synchronized, then src/session.py changes without docs/architecture.md and check reports stale — naming the affected document and file](assets/doccanon-demo.gif)
-
 **DocCanon is a verified context layer for coding agents.**
 
 It keeps a compact, trustworthy understanding of your project beside the code, so coding agents can reuse the same context instead of repeatedly scanning and re-interpreting the repository from scratch.
