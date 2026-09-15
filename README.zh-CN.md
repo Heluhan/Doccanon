@@ -4,6 +4,8 @@
 
 ### 别再让每个 Coding Agent 从头理解你的代码库。
 
+![一个真实的 opencode 会话使用 DocCanon：Agent 检查项目上下文，发现 src/auth/session.py 变更后 docs/features/session.md 已过期，并指出应负责的代码文件](assets/doccanon-demo.gif)
+
 **DocCanon 是为 Coding Agent 提供的可验证上下文层。**
 
 它把项目中稳定、重要的知识沉淀在代码库里，让不同 Coding Agent 可以复用同一份项目上下文，而不是每次接到新任务，都重新扫描仓库、重新理解架构、重新建立项目认知。

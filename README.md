@@ -4,6 +4,8 @@
 
 ### Stop making every coding agent rediscover your codebase.
 
+![A real opencode session using DocCanon: the agent checks project context, finds docs/features/session.md stale after src/auth/session.py changed, and names the responsible file](assets/doccanon-demo.gif)
+
 **DocCanon is a verified context layer for coding agents.**
 
 It keeps a compact, trustworthy understanding of your project beside the code, so coding agents can reuse the same context instead of repeatedly scanning and re-interpreting the repository from scratch.

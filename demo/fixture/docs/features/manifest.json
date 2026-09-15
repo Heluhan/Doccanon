@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "features": [
+    {
+      "id": "session-recovery",
+      "name": "Session recovery",
+      "status": "current",
+      "document": "docs/features/session.md",
+      "code_patterns": ["src/auth/session.py"]
+    }
+  ]
+}
