@@ -4,7 +4,7 @@
 
 ### Stop making every coding agent rediscover your codebase.
 
-![A real opencode session using DocCanon: the agent checks project context, finds docs/features/session.md stale after src/auth/session.py changed, and names the responsible file](assets/doccanon-demo.gif)
+![A paced DocCanon walkthrough: a governed project checks synchronized, then src/session.py changes without docs/architecture.md and check reports stale — naming the affected document and file](assets/doccanon-demo.gif)
 
 **DocCanon is a verified context layer for coding agents.**
 

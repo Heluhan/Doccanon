@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
-# Rebuild assets/doccanon-demo.gif from a real opencode session.
+# Rebuild assets/doccanon-demo.gif from the paced DocCanon walkthrough.
 #
 # Pipeline:
-#   1. demo/opencode-demo.tape records a real opencode session to MP4 (VHS).
-#   2. This script trims/speeds that recording and encodes the looping GIF.
+#   1. demo/prepare.py builds a governed project where covered code later drifts
+#      away from its canonical owner (the same shape as scripts/demo.py).
+#   2. demo/demo.tape records a paced terminal walkthrough to MP4 (VHS).
+#   3. This script encodes that MP4 into the looping GIF used by the README.
 #
 # VHS 0.12.0 has a regression that cancels the ffmpeg context before encoding
 # and silently writes no file; this script uses VHS 0.11.0 (downloaded into
-# demo/.tools/ if needed). Override with: VHS=/path/to/vhs demo/record_opencode.sh
-#
-# Session timing varies between runs, so the trim window can be tuned:
-#   START=7 END=30.5 SPEED=1.5 demo/record_opencode.sh
+# demo/.tools/ if needed). Override with: VHS=/path/to/vhs demo/record.sh
 
 set -euo pipefail
 
@@ -19,11 +18,8 @@ root="$(cd "$here/.." && pwd)"
 version="0.11.0"
 tools="$here/.tools"
 build="$here/.build"
-session="$build/opencode-session.mp4"
-
-start="${START:-7}"
-end="${END:-30.5}"
-speed="${SPEED:-1.5}"
+demo_path="${DEMO_PATH:-/tmp/doccanon-demo}"
+recording="$build/doccanon-demo.mp4"
 
 # Resolve a working VHS binary.
 if [[ -n "${VHS:-}" ]]; then
@@ -55,13 +51,18 @@ else
   bin="$tools/vhs"
 fi
 
-mkdir -p "$build"
-cd "$root"
-"$bin" demo/opencode-demo.tape
+mkdir -p "$build" "$root/assets"
+python3 "$here/prepare.py" --path "$demo_path"
 
-mkdir -p "$root/assets"
-ffmpeg -v error -y -i "$session" -filter_complex \
-  "[0:v]trim=start=${start}:end=${end},setpts=(PTS-STARTPTS)/${speed},fps=16,scale=960:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=192:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
+# The tape is a template so the demo project path stays configurable.
+sed -e "s#__DEMO_PATH__#${demo_path}#g" -e "s#__REPO__#${root}#g" \
+  "$here/demo.tape" > "$build/demo.tape"
+
+cd "$root"
+"$bin" "$build/demo.tape"
+
+ffmpeg -v error -y -i "$recording" -filter_complex \
+  "[0:v]fps=15,scale=1200:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=192:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle" \
   -loop 0 "$root/assets/doccanon-demo.gif"
 
 echo "Wrote $root/assets/doccanon-demo.gif" >&2

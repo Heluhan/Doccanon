@@ -4,7 +4,7 @@
 
 ### 别再让每个 Coding Agent 从头理解你的代码库。
 
-![一个真实的 opencode 会话使用 DocCanon：Agent 检查项目上下文，发现 src/auth/session.py 变更后 docs/features/session.md 已过期，并指出应负责的代码文件](assets/doccanon-demo.gif)
+![DocCanon 使用演示：受治理项目的上下文校验为 synchronized；随后 src/session.py 变更但 docs/architecture.md 未同步更新，check 报告 stale 并指出受影响的文档与文件](assets/doccanon-demo.gif)
 
 **DocCanon 是为 Coding Agent 提供的可验证上下文层。**
 
