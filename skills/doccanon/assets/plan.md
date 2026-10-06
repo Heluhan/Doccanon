@@ -1,6 +1,5 @@
 ---
 doccanon_authority: plan
-doccanon_plan: replace-with-plan-id
 doccanon_status: active
 doccanon_target: replace-with-release-or-milestone
 ---

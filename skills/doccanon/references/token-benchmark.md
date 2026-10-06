@@ -26,13 +26,7 @@ python3 /path/to/doccanon/skills/doccanon/scripts/measure_context.py \
 6. Grade both variants with the same task-specific rubric. Token reduction is publishable only when treatment success is no worse than control success.
 7. Report medians and ranges, not only the best run. Preserve failed runs.
 
-Use `benchmarks/runs-template.csv` as the recording schema, then summarize it:
-
-```bash
-python3 scripts/summarize_token_benchmark.py benchmarks/runs.csv --json
-```
-
-The summarizer marks a result `claim_ready` only after both variants have at least 15 runs and the DocCanon success rate is no worse than the control. That is a minimum reporting gate, not proof that the result generalizes to other repositories or agents.
+Record every run with at least: task, variant, run number, input and output tokens, tool calls, elapsed seconds, success, and notes. Keep the raw rows and report medians, ranges, and failed runs. A result is reportable only after both variants have at least 15 runs across at least 5 paired tasks and the DocCanon success rate is no worse than the control. That is a minimum reporting gate, not proof that the result generalizes to other repositories or agents.
 
 ## Safe public wording before A/B results exist
 

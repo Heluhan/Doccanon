@@ -59,7 +59,7 @@ Canonical current-state documents must be useful change contracts, not inventori
 ## Retirement
 
 - Move obsolete material into the configured archive root; never leave retired content mixed into the live documentation tree.
-- Stamp archived material with a non-active authority and a short retirement notice naming its disposition or canonical owner. Do not rewrite its content.
+- Stamp archived material with a retirement authority (`historical` or `superseded`) and a short notice naming its disposition or canonical owner. Do not rewrite its content.
 - Ensure default text search excludes the archive root; archaeology requires explicit opt-in. Keep the archive tracked so provenance survives.
 - Keep unresolved material in place until it receives an evidence-backed disposition. Retire accepted, superseded, or ignored sources only.
 - A retired document never substitutes for a canonical owner and is never counted as current-state coverage.

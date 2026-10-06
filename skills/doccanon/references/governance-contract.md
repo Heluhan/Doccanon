@@ -45,7 +45,7 @@ When `features` applies, domain coverage requires a complete `docs/features/mani
 | `development/` | Time-bounded development milestones and verification | Current product truth |
 | `releases/` | Versioned shipped-change snapshots and known limitations | Future plans or branch-local claims |
 
-One fact has one canonical owner. Other canonical documents link to it. Migrated legacy sources are frozen provenance and are not maintained in parallel. Freezing is a DocCanon manifest/context behavior; do not add a custom enforcement system to each project. The repository-root agent entry (`AGENTS.md`) and its adapters are generated projections of these owners; they are not canonical locations and must not become a hand-maintained second source of truth.
+One fact has one canonical owner. Other canonical documents link to it. Migrated legacy sources are frozen provenance and are not maintained in parallel. Freezing is a DocCanon behavior: manifest disposition, relocation into the archive root, and default exclusion from context and text search. Do not add a custom enforcement system to each project. The repository-root agent entry (`AGENTS.md`) and its adapters are generated projections of these owners; they are not canonical locations and must not become a hand-maintained second source of truth.
 
 Plans are optional. A project promotes without a current-state owner for `plans/`; plans declare `doccanon_authority: plan` with a `doccanon_status` and an optional `doccanon_target`, and they never substitute for current-state behavior. When a goal ships or is abandoned, retire its plan and record the outcome in development or release history.
 
@@ -57,7 +57,10 @@ Plans are optional. A project promotes without a current-state owner for `plans/
 - `plan`: intended future work; routable, but never current truth. Update it as work progresses and retire it when the goal ships or is abandoned.
 - `generated`: regenerate from its declared source.
 - `snapshot`: time-bounded reference; never treat as current without verification.
-- `historical`: retired provenance; never current truth. Retired material is archived outside the live docs tree and excluded from both default context and default text search.
+- `historical`: retained provenance with no direct replacement; never current truth.
+- `superseded`: replaced by a newer canonical owner; never current truth.
+
+Retired material (`historical` or `superseded`) lives in the archive root, outside the live docs tree, and is excluded from both default context and default text search.
 
 `human-confirmed` may be assigned only after the user explicitly confirms the content. Agent authorship, file age, and Git history do not establish human confirmation.
 

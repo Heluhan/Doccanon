@@ -16,6 +16,7 @@ Do not interpret an unmapped file as having no documentation impact. Review it s
 - If it introduces or materially changes a cohesive user or operator capability, create or update its feature contract and feature-manifest entry. Add accurate code patterns so rerunning the plan maps the file.
 - If it changes a shared interaction, architecture, product, or operations boundary, update the corresponding current-state owner and its coverage metadata.
 - Exclude it only when it has no durable semantic effect, such as a fixture, formatting-only change, or generated artifact. Record a concrete file-level reason.
+- Repository-meta files (root README, LICENSE, CHANGELOG, and VCS or editor dotfiles) are not implementation files.
 - Generated agent entry files (`AGENTS.md` and configured adapters) are projections rather than implementation. The helper keeps them out of the implementation map; the user-owned custom section is never treated as current truth.
 
 ## Domain review

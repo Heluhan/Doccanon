@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.0
+
+- Removed dead configuration and metadata: `.doccanon.yml` `schema_version`, `branch_policy`, and `reconsider` fields, the unused historical-authorities constant, and the unused `doccanon_plan` frontmatter field.
+- Converged retirement semantics: `retire --disposition` now accepts only `historical` or `superseded`, stamps exactly that authority, reports which search-ignore file already covers the archive, and writes YAML frontmatter only for Markdown documents.
+- Added a `missing-plan-status` warning and documented the `superseded` authority in the governance contract.
+- Repository-meta files (root README, LICENSE, CHANGELOG, VCS/editor dotfiles) are no longer treated as implementation files during sync or freshness checks.
+- Deduplicated `SKILL.md` against the references so workflow rules have a single owner; replaced documentation-wording tests with package-integrity and behavior tests.
+- Removed the speculative benchmark CSV and summarizer tooling; the context-volume proxy and A/B protocol documentation remain.
+- The installer no longer copies local `__pycache__` artifacts into destinations.
+
 ## 0.11.0
 
 - Added retirement relocation: `retire` moves obsolete documents into a configurable archive root (default `.doccanon/archive/`), stamps a non-active authority with a retirement notice, and records search exclusion.

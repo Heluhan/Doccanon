@@ -31,11 +31,18 @@ DEFAULT_CUSTOM_HINT = (
     "verbatim and does not verify it. Keep durable project knowledge in CONTEXT.md and docs/. -->"
 )
 DEFAULT_ARCHIVE_ROOT = ".doccanon/archive"
-RETIRE_DISPOSITIONS = {
-    "historical": "historical",
-    "superseded": "superseded",
-    "archived": "historical",
-    "ignored": "historical",
+RETIRE_AUTHORITIES = {"historical", "superseded"}
+REPO_META_FILES = {".gitignore", ".gitattributes", ".editorconfig", ".mailmap"}
+REPO_META_STEMS = {
+    "readme",
+    "license",
+    "licence",
+    "changelog",
+    "contributing",
+    "security",
+    "code_of_conduct",
+    "authors",
+    "notice",
 }
 ENTRY_CATEGORY_LABELS = {
     "product": "Product",
@@ -62,7 +69,6 @@ ENTRY_CATEGORY_ORDER = [
 ENTRY_ROUTING_ROW_LIMIT = 12
 MATURITIES = {"bootstrapping", "governed"}
 CONTEXT_AUTHORITIES = {"current-state", "human-confirmed", "append-only", "generated", "plan"}
-HISTORICAL_AUTHORITIES = {"snapshot", "historical", "superseded", "draft", "unclassified"}
 PLAN_STATUSES = {"active", "ready", "shipped", "abandoned"}
 RELEASABLE_PLAN_STATUSES = {"ready", "shipped"}
 REQUIRED_FEATURE_SECTIONS = {
@@ -194,7 +200,6 @@ def parse_simple_yaml(text: str) -> dict[str, Any]:
 
 def dump_config(data: dict[str, Any]) -> str:
     order = [
-        "schema_version",
         "status",
         "maturity",
         "docs_root",
@@ -205,12 +210,10 @@ def dump_config(data: dict[str, Any]) -> str:
         "archive_root",
         "agent_entry",
         "agent_adapters",
-        "branch_policy",
         "integration_branch",
         "release_branches",
         "development_log_root",
         "release_log_root",
-        "reconsider",
         "reason",
         "decided_at",
     ]
@@ -248,7 +251,6 @@ def load_config(root: Path) -> dict[str, Any] | None:
         data.setdefault("archive_root", DEFAULT_ARCHIVE_ROOT)
         data.setdefault("agent_entry", DEFAULT_AGENT_ENTRY)
         data.setdefault("agent_adapters", list(DEFAULT_AGENT_ADAPTERS))
-        data.setdefault("branch_policy", "aware")
         data.setdefault("release_branches", [])
         data.setdefault("development_log_root", "docs/development")
         data.setdefault("release_log_root", "docs/releases")
@@ -309,7 +311,6 @@ def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = F
     if branch["dirty"] and not allow_dirty:
         raise DocCanonError("Refusing initialization in a dirty worktree; isolate or finish existing work, or pass --allow-dirty explicitly")
     config = {
-        "schema_version": 5,
         "status": "enabled",
         "maturity": "bootstrapping",
         "docs_root": "docs",
@@ -318,12 +319,10 @@ def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = F
         "archive_root": DEFAULT_ARCHIVE_ROOT,
         "agent_entry": DEFAULT_AGENT_ENTRY,
         "agent_adapters": list(DEFAULT_AGENT_ADAPTERS),
-        "branch_policy": "aware",
         "integration_branch": branch["integration_branch"],
         "release_branches": branch["release_branches"],
         "development_log_root": "docs/development",
         "release_log_root": "docs/releases",
-        "reconsider": "manual",
         "decided_at": now_iso(),
     }
     write_config(root, config)
@@ -342,11 +341,9 @@ def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = F
 def disable(root: Path, reason: str) -> dict[str, Any]:
     existing = load_config(root) or {}
     config = {
-        "schema_version": 3,
         "status": "disabled",
         "docs_root": existing.get("docs_root", "docs"),
         "context_file": existing.get("context_file", "CONTEXT.md"),
-        "reconsider": "manual",
         "reason": reason,
         "decided_at": now_iso(),
     }
@@ -359,15 +356,6 @@ def git_head(root: Path) -> str | None:
         return run_git(root, ["rev-parse", "HEAD"])
     except DocCanonError:
         return None
-
-
-def git_ref_exists(root: Path, ref: str) -> bool:
-    result = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--verify", f"{ref}^{{commit}}"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return result.returncode == 0
 
 
 def current_branch(root: Path) -> str:
@@ -393,8 +381,8 @@ def branch_context(root: Path, config: dict[str, Any] | None = None, target: str
     for name in candidates:
         if not name or any(existing[0] == name for existing in available):
             continue
-        ref = f"origin/{name}" if git_ref_exists(root, f"origin/{name}") else name
-        if git_ref_exists(root, ref):
+        ref = f"origin/{name}" if revision_exists(root, f"origin/{name}") else name
+        if revision_exists(root, ref):
             available.append((name, ref))
     integration_name = configured if configured else (available[0][0] if available else branch)
     integration_ref = next((ref for name, ref in available if name == integration_name), integration_name)
@@ -407,17 +395,17 @@ def branch_context(root: Path, config: dict[str, Any] | None = None, target: str
         if ancestors:
             _, integration_name, integration_ref = sorted(ancestors)[0]
     release_branches = [str(item) for item in (config.get("release_branches", []) if config else [])]
-    if not release_branches and integration_name != "main" and git_ref_exists(root, "main"):
+    if not release_branches and integration_name != "main" and revision_exists(root, "main"):
         release_branches = ["main"]
     selected = target or integration_ref
-    if target and "/" not in target and git_ref_exists(root, f"origin/{target}"):
+    if target and "/" not in target and revision_exists(root, f"origin/{target}"):
         selected = f"origin/{target}"
-    elif target and not git_ref_exists(root, target):
+    elif target and not revision_exists(root, target):
         remote_target = f"origin/{target}"
-        selected = remote_target if git_ref_exists(root, remote_target) else target
-    merge_base = run_git(root, ["merge-base", selected, "HEAD"], check=False) if git_ref_exists(root, selected) else None
+        selected = remote_target if revision_exists(root, remote_target) else target
+    merge_base = run_git(root, ["merge-base", selected, "HEAD"], check=False) if revision_exists(root, selected) else None
     ahead = behind = 0
-    if git_ref_exists(root, selected):
+    if revision_exists(root, selected):
         counts = run_git(root, ["rev-list", "--left-right", "--count", f"{selected}...HEAD"], check=False).split()
         if len(counts) == 2:
             behind, ahead = (int(counts[0]), int(counts[1]))
@@ -569,6 +557,17 @@ def doccanon_artifact_paths(config: dict[str, Any]) -> set[str]:
     paths = {relative for relative, _ in agent_entry_targets(config)}
     paths.update({".ignore", ".rgignore"})
     return paths
+
+
+def is_repo_meta(relative: str) -> bool:
+    normalized = relative.replace(os.sep, "/")
+    if "/" in normalized:
+        return False
+    lower = normalized.lower()
+    if lower in REPO_META_FILES:
+        return True
+    stem = re.split(r"[._]", lower, maxsplit=1)[0]
+    return stem in REPO_META_STEMS
 
 
 def entry_routing_rows(root: Path, config: dict[str, Any]) -> list[tuple[str, str]]:
@@ -750,9 +749,9 @@ def archive_root_relative(config: dict[str, Any]) -> str:
     return normalize_relative_path(value, "archive_root").rstrip("/")
 
 
-def search_ignore_covers(root: Path, archive_rel: str) -> bool:
+def search_ignore_file(root: Path, archive_rel: str) -> str | None:
     if not archive_rel:
-        return True
+        return None
     patterns = {
         archive_rel,
         archive_rel + "/",
@@ -766,8 +765,12 @@ def search_ignore_covers(root: Path, archive_rel: str) -> bool:
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
             stripped = line.strip()
             if stripped and not stripped.startswith("#") and stripped in patterns:
-                return True
-    return False
+                return name
+    return None
+
+
+def search_ignore_covers(root: Path, archive_rel: str) -> bool:
+    return search_ignore_file(root, archive_rel) is not None
 
 
 def ensure_search_ignore(root: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -775,8 +778,9 @@ def ensure_search_ignore(root: Path, config: dict[str, Any]) -> dict[str, Any]:
     if not archive_rel:
         return {"updated": False, "file": None, "pattern": None}
     pattern = archive_rel + "/"
-    if search_ignore_covers(root, archive_rel):
-        return {"updated": False, "file": ".ignore", "pattern": pattern}
+    covering = search_ignore_file(root, archive_rel)
+    if covering:
+        return {"updated": False, "file": covering, "pattern": pattern}
     path = root / ".ignore"
     existing = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
     separator = "" if not existing or existing.endswith("\n") else "\n"
@@ -806,9 +810,9 @@ def retire_document(
     archive_rel = archive_root_relative(config)
     if not archive_rel:
         raise DocCanonError("archive_root is disabled in .doccanon.yml")
-    stamp = RETIRE_DISPOSITIONS.get(disposition)
-    if stamp is None:
-        raise DocCanonError("disposition must be historical, superseded, archived, or ignored")
+    if disposition not in RETIRE_AUTHORITIES:
+        raise DocCanonError("disposition must be historical or superseded")
+    stamp = disposition
     source = (root / document).resolve()
     try:
         source.relative_to(root)
@@ -834,10 +838,12 @@ def retire_document(
         raise DocCanonError(f"Archive target already exists: {target.relative_to(root).as_posix()}")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
-    values: dict[str, Any] = {"doccanon_authority": stamp, "doccanon_retired_from": relative}
-    if owner:
-        values["doccanon_owner"] = owner.strip()
-    update_frontmatter(target, values)
+    markdown_like = target.suffix.lower() in {".md", ".mdx", ".markdown"}
+    if markdown_like:
+        values: dict[str, Any] = {"doccanon_authority": stamp, "doccanon_retired_from": relative}
+        if owner:
+            values["doccanon_owner"] = owner.strip()
+        update_frontmatter(target, values)
     notice_lines = [
         "> **Retired by DocCanon.** This document is provenance, not current truth.",
         f"> Archived from `{relative}` on {now_iso()[:10]}.",
@@ -864,10 +870,11 @@ def retire_document(
             ]
         )
         source.write_text("\n".join(stub) + "\n", encoding="utf-8")
-        stub_values: dict[str, Any] = {"doccanon_authority": stamp, "doccanon_archived_to": archived_to}
-        if owner:
-            stub_values["doccanon_owner"] = owner.strip()
-        update_frontmatter(source, stub_values)
+        if markdown_like:
+            stub_values: dict[str, Any] = {"doccanon_authority": stamp, "doccanon_archived_to": archived_to}
+            if owner:
+                stub_values["doccanon_owner"] = owner.strip()
+            update_frontmatter(source, stub_values)
         pointer_path = relative
     else:
         source.unlink()
@@ -1326,6 +1333,15 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
                         record.relative,
                     )
                 )
+            elif record.plan_status is None:
+                findings.append(
+                    Finding(
+                        "warning",
+                        "missing-plan-status",
+                        "Plan must declare doccanon_status: active, ready, shipped, or abandoned",
+                        record.relative,
+                    )
+                )
         elif record.relative.startswith(plans_prefix) and record.authority == "unclassified":
             findings.append(
                 Finding(
@@ -1385,13 +1401,13 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
         relevant = {
             item
             for item in current_changes
-            if item not in doc_paths and item not in artifact_paths and match_any(item, record.covers)
+            if item not in doc_paths and item not in artifact_paths and not is_repo_meta(item) and match_any(item, record.covers)
         }
         if not staged and not base:
             relevant.update(
                 item
                 for item in diff_since(root, anchor)
-                if item not in doc_paths and item not in artifact_paths and match_any(item, record.covers)
+                if item not in doc_paths and item not in artifact_paths and not is_repo_meta(item) and match_any(item, record.covers)
             )
 
         if relevant and rel not in current_changes:
@@ -1838,7 +1854,6 @@ def promote(
             )
     config.update(
         {
-            "schema_version": 5,
             "maturity": "governed",
             "required_domains": required_domains,
             "migration_manifest": manifest,
@@ -1867,7 +1882,7 @@ def preflight(root: Path, target: str | None) -> tuple[dict[str, Any], int]:
         raise DocCanonError("preflight requires an enabled DocCanon project")
     branch = branch_context(root, config, target)
     base_ref = str(branch["base_ref"])
-    if not git_ref_exists(root, base_ref):
+    if not revision_exists(root, base_ref):
         raise DocCanonError(f"Cannot resolve preflight target: {base_ref}")
     checked, _ = check_project(root, base=base_ref, staged=False)
     changed = changed_files(root, base=base_ref, staged=False)
@@ -1885,7 +1900,11 @@ def preflight(root: Path, target: str | None) -> tuple[dict[str, Any], int]:
             patterns = feature.get("code_patterns", [])
             if isinstance(patterns, str):
                 patterns = [patterns]
-            code_changes = sorted(item for item in changed if match_any(item, [str(pattern) for pattern in patterns]))
+            code_changes = sorted(
+                item
+                for item in changed
+                if not is_repo_meta(item) and match_any(item, [str(pattern) for pattern in patterns])
+            )
             if not code_changes:
                 continue
             document = str(feature.get("document", ""))
@@ -1937,7 +1956,7 @@ def documentation_impact(root: Path, target: str | None) -> dict[str, Any]:
         raise DocCanonError("sync requires an enabled DocCanon project")
     branch = branch_context(root, config, target)
     base_ref = str(branch["base_ref"])
-    if not git_ref_exists(root, base_ref):
+    if not revision_exists(root, base_ref):
         raise DocCanonError(f"Cannot resolve sync target: {base_ref}")
     changed = changed_files(root, base=base_ref, staged=False)
     docs_root = str(config.get("docs_root", "docs")).rstrip("/") + "/"
@@ -1950,6 +1969,7 @@ def documentation_impact(root: Path, target: str | None) -> dict[str, Any]:
         and path != context_file
         and path not in artifact_paths
         and not path.startswith(docs_root)
+        and not is_repo_meta(path)
     )
 
     feature_patterns: list[str] = []
@@ -2427,7 +2447,7 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--staged", action="store_true")
     item.add_argument("--json", action="store_true")
 
-    item = sub.add_parser("inventory", aliases=["migrate-scan"])
+    item = sub.add_parser("inventory")
     item.add_argument("--limit", type=int, default=500)
     item.add_argument("--json", action="store_true")
 
@@ -2552,7 +2572,7 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 0
         elif args.command == "check":
             result, exit_code = check_project(root, args.base, args.staged)
-        elif args.command in {"inventory", "migrate-scan"}:
+        elif args.command == "inventory":
             result, exit_code = inventory(root, args.limit), 0
             result["status"] = "scanned"
         elif args.command == "context":

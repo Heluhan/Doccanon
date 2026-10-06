@@ -123,7 +123,11 @@ def install_copy(destination: Path, agent: str, scope: str, dry_run: bool) -> di
         temporary_parent = Path(tempfile.mkdtemp(prefix=".doccanon-install-", dir=destination.parent))
         staged = temporary_parent / "doccanon"
         try:
-            shutil.copytree(SOURCE, staged)
+            shutil.copytree(
+                SOURCE,
+                staged,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
+            )
             (staged / MARKER).write_text(
                 json.dumps(
                     {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import tempfile
@@ -10,7 +11,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
 DEMO = ROOT / "scripts" / "demo.py"
-SUMMARIZER = ROOT / "scripts" / "summarize_token_benchmark.py"
 HELPER = ROOT / "skills" / "doccanon" / "scripts" / "doccanon.py"
 MEASURE = ROOT / "skills" / "doccanon" / "scripts" / "measure_context.py"
 
@@ -83,11 +83,21 @@ class DistributionTest(unittest.TestCase):
         self.assertIn("Code changed without its owner: stale", output)
         self.assertIn("stale-document", output)
 
-    def test_benchmark_summary_does_not_claim_from_too_few_runs(self) -> None:
-        template = ROOT / "benchmarks" / "runs-template.csv"
-        payload = json.loads(run("python3", str(SUMMARIZER), str(template), "--json").stdout)
-        self.assertFalse(payload["claim_ready"])
-        self.assertIsNone(payload["median_input_token_reduction_percent"])
+    def test_installer_skips_local_python_caches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            (source / "scripts" / "__pycache__").mkdir(parents=True)
+            (source / "SKILL.md").write_text("---\nname: doccanon\n---\n", encoding="utf-8")
+            (source / "scripts" / "__pycache__" / "stale.pyc").write_bytes(b"stale")
+            spec = importlib.util.spec_from_file_location("doccanon_install", INSTALLER)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            module.SOURCE = source
+            destination = root / "installed"
+            module.install_copy(destination, "universal", "project", dry_run=False)
+            self.assertTrue((destination / "SKILL.md").is_file())
+            self.assertFalse((destination / "scripts" / "__pycache__").exists())
 
     def test_context_measurement_labels_proxy_and_requires_fresh_docs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

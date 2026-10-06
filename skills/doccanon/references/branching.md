@@ -37,7 +37,6 @@ Never interpret permission to initialize DocCanon as permission to manipulate ex
 Configure only when automatic inference is insufficient:
 
 ```yaml
-branch_policy: aware
 integration_branch: develop
 release_branches:
   - main

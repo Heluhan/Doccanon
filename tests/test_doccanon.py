@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -50,21 +51,12 @@ class DocCanonCLITest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_skill_links_self_contained_operating_contract(self) -> None:
+    def test_skill_package_links_every_reference(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        contract = (SKILL_ROOT / "references" / "operating-contract.md").read_text(encoding="utf-8")
-        self.assertIn("references/operating-contract.md", skill)
-        for phrase in (
-            "Non-negotiable loop",
-            "Project-local information architecture",
-            "Admission",
-            "Distribution language",
-            "Knowledge quality",
-            "Migration",
-            "Branches and history",
-            "Optional Grill with Docs relationship",
-        ):
-            self.assertIn(phrase, contract)
+        self.assertIn("name: doccanon", skill)
+        linked = set(re.findall(r"\(references/([^)]+)\)", skill))
+        present = {path.name for path in (SKILL_ROOT / "references").glob("*.md")}
+        self.assertEqual(present, linked)
 
     def test_enable_and_disable_are_project_local(self) -> None:
         temp, root = self.make_repo()
@@ -283,7 +275,7 @@ class DocCanonCLITest(unittest.TestCase):
         plans = root / "docs" / "plans"
         plans.mkdir()
         (plans / "v1-launch.md").write_text(
-            "---\ndoccanon_authority: plan\ndoccanon_plan: v1-launch\n"
+            "---\ndoccanon_authority: plan\n"
             "doccanon_status: active\ndoccanon_target: v1.0.0\n---\n\n"
             "# v1 launch\n\n## Goal\n\nShip the ledger seal to production with a verified rollback path.\n\n"
             "## Release conditions\n\n- [ ] Load test passes\n",
@@ -314,15 +306,20 @@ class DocCanonCLITest(unittest.TestCase):
         plans = root / "docs" / "plans"
         plans.mkdir()
         (plans / "done.md").write_text(
-            "---\ndoccanon_authority: plan\ndoccanon_plan: done\ndoccanon_status: shipped\n---\n\n"
+            "---\ndoccanon_authority: plan\ndoccanon_status: shipped\n---\n\n"
             "# Shipped plan\n\n## Goal\n\nAlready shipped.\n",
             encoding="utf-8",
         )
         (plans / "drafty.md").write_text("# Drafty plan\n\nNo authority yet.\n", encoding="utf-8")
+        (plans / "stateless.md").write_text(
+            "---\ndoccanon_authority: plan\n---\n\n# Stateless plan\n\n## Goal\n\nNo declared status.\n",
+            encoding="utf-8",
+        )
         checked = json.loads(self.cli(root, "check", "--json", check=False).stdout)
         by_code = {item["code"]: item for item in checked["findings"]}
         self.assertEqual("warning", by_code["inactive-plan-not-retired"]["level"])
         self.assertEqual("warning", by_code["unclassified-plan-document"]["level"])
+        self.assertEqual("warning", by_code["missing-plan-status"]["level"])
 
     def test_release_gate_requires_a_ready_plan(self) -> None:
         temp, root = self.make_repo()
@@ -352,7 +349,7 @@ class DocCanonCLITest(unittest.TestCase):
         plans.mkdir()
         plan = plans / "v1-launch.md"
         plan.write_text(
-            "---\ndoccanon_authority: plan\ndoccanon_plan: v1-launch\n"
+            "---\ndoccanon_authority: plan\n"
             "doccanon_status: active\ndoccanon_target: v1.0.0\n---\n\n"
             "# v1 launch\n\n## Goal\n\nShip the ledger seal to production.\n\n"
             "## Release conditions\n\n- [ ] Load test passes\n",
@@ -440,7 +437,13 @@ class DocCanonCLITest(unittest.TestCase):
         self.assertIn("docs/architecture.md", archived)
         ignore = (root / ".ignore").read_text(encoding="utf-8")
         self.assertIn(".doccanon/archive/", ignore)
+        self.assertEqual(".ignore", retired["search_ignore"]["file"])
         self.assertTrue(retired["search_ignore"]["updated"])
+
+        (root / "notes" / "second.md").write_text("# Second\n\nOld too.\n", encoding="utf-8")
+        again = json.loads(self.cli(root, "retire", "notes/second.md", "--json").stdout)
+        self.assertEqual(".ignore", again["search_ignore"]["file"])
+        self.assertFalse(again["search_ignore"]["updated"])
 
         scanned = json.loads(self.cli(root, "inventory", "--json").stdout)
         self.assertNotIn(
@@ -493,9 +496,33 @@ class DocCanonCLITest(unittest.TestCase):
         (archived / "old.md").write_text("old\n", encoding="utf-8")
         checked = json.loads(self.cli(root, "check", "--json", check=False).stdout)
         self.assertIn("archive-not-search-excluded", {item["code"] for item in checked["findings"]})
-        (root / ".ignore").write_text(".doccanon/archive/\n", encoding="utf-8")
+        (root / ".gitignore").write_text(".doccanon/archive/\n", encoding="utf-8")
         checked_again = json.loads(self.cli(root, "check", "--json", check=False).stdout)
         self.assertNotIn("archive-not-search-excluded", {item["code"] for item in checked_again["findings"]})
+
+    def test_retire_disposition_authority_and_non_markdown_notice(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        notes = root / "notes"
+        notes.mkdir()
+        (notes / "old.md").write_text("# Old\n\nSuperseded content.\n", encoding="utf-8")
+        retired = json.loads(
+            self.cli(root, "retire", "notes/old.md", "--disposition", "superseded", "--json").stdout
+        )
+        self.assertEqual("superseded", retired["authority"])
+        archived_md = (root / ".doccanon" / "archive" / "notes" / "old.md").read_text(encoding="utf-8")
+        self.assertIn("doccanon_authority: superseded", archived_md)
+
+        (notes / "old.txt").write_text("plain legacy text\n", encoding="utf-8")
+        self.cli(root, "retire", "notes/old.txt", "--json")
+        archived_txt = (root / ".doccanon" / "archive" / "notes" / "old.txt").read_text(encoding="utf-8")
+        self.assertIn("Retired by DocCanon", archived_txt)
+        self.assertNotIn("doccanon_authority", archived_txt)
+
+        (notes / "bad.md").write_text("# Bad\n", encoding="utf-8")
+        refused = self.cli(root, "retire", "notes/bad.md", "--disposition", "archived", "--json", check=False)
+        self.assertEqual(2, refused.returncode)
 
     def test_context_prefers_governed_docs_and_excludes_history(self) -> None:
         temp, root = self.make_repo()
@@ -1108,6 +1135,22 @@ class DocCanonCLITest(unittest.TestCase):
         self.assertIn("architecture", completed["impact_receipt"]["excluded_domains"])
         self.assertIn("scripts/fixture.py", completed["impact_receipt"]["excluded_unmapped_files"])
 
+    def test_repo_meta_changes_do_not_require_documentation_mapping(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        git(root, "add", ".")
+        git(root, "commit", "-qm", "enable doccanon")
+        self.write_architecture(root / "docs" / "architecture.md")
+        self.cli(root, "mark-verified", "docs/architecture.md", "--covers", "src/**", "--domain", "architecture")
+        self.cli(root, "promote", "--domain", "architecture")
+        git(root, "add", ".")
+        git(root, "commit", "-qm", "govern architecture")
+        (root / "README.md").write_text("# Demo\n\nProject readme.\n", encoding="utf-8")
+        plan = json.loads(self.cli(root, "sync", "plan", "--json").stdout)
+        self.assertNotIn("README.md", plan["implementation_files"])
+        self.assertNotIn("README.md", plan["unmapped_implementation_files"])
+
     def test_development_and_release_logs_are_historical_context(self) -> None:
         temp, root = self.make_repo()
         self.addCleanup(temp.cleanup)
@@ -1189,18 +1232,6 @@ class DocCanonCLITest(unittest.TestCase):
         paths = {item["path"] for item in json.loads(context.stdout)["documents"]}
         self.assertNotIn(development["path"], paths)
         self.assertNotIn(release["path"], paths)
-
-    def test_skill_contract_requires_automatic_read_only_history_capture(self) -> None:
-        skill_root = Path(__file__).resolve().parents[1] / "skills" / "doccanon"
-        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
-        logs = (skill_root / "references" / "logs.md").read_text(encoding="utf-8")
-        self.assertIn("Run `sync complete`", skill)
-        self.assertIn("Do not ask the user to run DocCanon commands", skill)
-        self.assertIn("Git hooks remain read-only", skill)
-        self.assertIn("Do not let an unmapped file silently pass", skill)
-        self.assertIn("references/synchronization.md", skill)
-        self.assertIn("not the user, owns history capture", logs)
-        self.assertIn("Automatic retries", logs)
 
     def test_verified_revision_from_unrelated_branch_is_rejected(self) -> None:
         temp, root = self.make_repo()
