@@ -2,6 +2,17 @@
 
 DocCanon evolves with the skill, while projects keep the state written by older versions. An upgrade is a review pass over that legacy state: deterministic detection, idempotent mechanical cleanup, and explicit semantic decisions. It is not a fresh migration and never a silent rewrite.
 
+## Skill updates are host-level
+
+Updating the skill itself is a user- or host-authorized action. A project agent never fetches code, and nothing pulls from a remote automatically. Update the installed copy with the mechanism that installed it:
+
+- gh-managed (`gh skill install`, preview): run `gh skill update` (`--dry-run` previews; pinned installs follow their pin).
+- `install.py`-managed: update the source checkout, then rerun the same install command. Owned copies are backed up; `python3 install.py --check --json` reports installed versus source versions without writing.
+- Symlinked development checkout: update the source checkout behind the link.
+- Unknown or manually copied installs: reinstall through the host's skill manager.
+
+Only after the skill is current, run the project-side reconciliation below. `upgrade status` reports how the running skill was installed and which layer to update.
+
 ## Version anchor
 
 `.doccanon.yml` records `doccanon_version`: the skill version the project has been reconciled with. A missing value means the project predates the upgrade mechanism (legacy). Only a completed reconciliation pass stamps the version; ordinary task work never moves it.

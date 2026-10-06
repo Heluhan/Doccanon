@@ -14,7 +14,9 @@ DocCanon follows the directory-based Agent Skills format: a `SKILL.md` entrypoin
 
 `python3 install.py --agent universal --scope project` is the lowest-duplication default for hosts that recognize `.agents/skills`. Use host-specific targets only when the host requires or prefers its own directory.
 
-Run `python3 install.py --dry-run ...` to inspect paths before writing. Start or refresh the agent session after installing so discovery runs again.
+Run `python3 install.py --dry-run ...` to inspect paths before writing. `python3 install.py --check --json` reports installed versus source versions and exits 1 when an update is available, without writing anything. Start or refresh the agent session after installing so discovery runs again.
+
+Skill updates are host-level: `gh skill update` for gh-managed installs, or update the source checkout and rerun `install.py` for managed copies. A project agent never fetches the skill itself; project-side reconciliation is `doccanon upgrade status`.
 
 ## Generated entry files
 

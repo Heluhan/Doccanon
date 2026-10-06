@@ -275,6 +275,16 @@ DocCanon has no runtime service, API key, vector database, or model dependency.
 
 The helper requires **Git** and **Python 3.10+**.
 
+### Updating DocCanon
+
+Skill updates and project upgrades are separate layers. The skill copy is updated by the user or host tooling; a project agent never pulls code, and nothing updates automatically.
+
+- `gh skill` installs: run `gh skill update` (GitHub CLI preview).
+- `install.py` installs: update the source checkout and rerun the same command; owned copies are backed up first. `python3 install.py --check --json` reports installed versus source versions without writing.
+- Symlinked development checkouts: update the source checkout behind the link.
+
+After the skill copy is current, run `doccanon upgrade status` inside the project and reconcile the reported steps; `upgrade apply` stamps the new version once no semantic step remains.
+
 See the full [agent compatibility matrix](docs/agent-compatibility.md) for host-specific placement and discovery details.
 
 ---

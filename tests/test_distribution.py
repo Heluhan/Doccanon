@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -106,6 +107,73 @@ class DistributionTest(unittest.TestCase):
             module.install_copy(destination, "universal", "project", dry_run=False)
             self.assertTrue((destination / "SKILL.md").is_file())
             self.assertFalse((destination / "scripts" / "__pycache__").exists())
+
+    def test_installer_check_reports_version_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            home = root / "home"
+            project.mkdir()
+            home.mkdir()
+            base = (
+                "python3", str(INSTALLER), "--agent", "universal", "--scope", "project",
+                "--project", str(project), "--home", str(home),
+            )
+            absent = json.loads(run(*base, "--check", "--json").stdout)
+            self.assertEqual("ok", absent["status"])
+            self.assertEqual("not-installed", absent["results"][0]["status"])
+
+            run(*base)
+            fresh = run(*base, "--check", "--json")
+            self.assertEqual(0, fresh.returncode)
+            self.assertEqual("up-to-date", json.loads(fresh.stdout)["results"][0]["status"])
+
+            marker = project / ".agents" / "skills" / "doccanon" / ".doccanon-install.json"
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            payload["version"] = "0.0.1"
+            marker.write_text(json.dumps(payload), encoding="utf-8")
+            stale = run(*base, "--check", "--json", check=False)
+            self.assertEqual(1, stale.returncode)
+            data = json.loads(stale.stdout)
+            self.assertEqual("updates-available", data["status"])
+            self.assertEqual("update-available", data["results"][0]["status"])
+
+    @unittest.skipIf(os.name == "nt", "symlink provenance test requires POSIX symlinks")
+    def test_installed_and_symlinked_copies_report_install_method(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            home = root / "home"
+            target = root / "target"
+            project.mkdir()
+            home.mkdir()
+            target.mkdir()
+            run(
+                "python3", str(INSTALLER), "--agent", "universal", "--scope", "project",
+                "--project", str(project), "--home", str(home), "--json",
+            )
+            installed_helper = project / ".agents" / "skills" / "doccanon" / "scripts" / "doccanon.py"
+            installed = json.loads(
+                run(
+                    "python3", str(installed_helper), "--project", str(target),
+                    "upgrade", "status", "--json", check=False,
+                ).stdout
+            )
+            self.assertEqual("install.py", installed["install"]["method"])
+            self.assertEqual(
+                json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"],
+                installed["install"]["installed_version"],
+            )
+
+            link = root / "linked-skill"
+            link.symlink_to(ROOT / "skills" / "doccanon", target_is_directory=True)
+            linked = json.loads(
+                run(
+                    "python3", str(link / "scripts" / "doccanon.py"), "--project", str(target),
+                    "upgrade", "status", "--json", check=False,
+                ).stdout
+            )
+            self.assertEqual("symlink", linked["install"]["method"])
 
     def test_context_measurement_labels_proxy_and_requires_fresh_docs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

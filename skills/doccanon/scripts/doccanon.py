@@ -299,6 +299,56 @@ def skill_version() -> str:
     return match.group(1).strip() if match else "unknown"
 
 
+def install_provenance() -> dict[str, Any]:
+    raw = Path(__file__)
+    skill_dir = raw.parent.parent
+    try:
+        resolved = skill_dir.resolve()
+    except OSError:
+        resolved = skill_dir
+    method = "unknown"
+    installed_version: str | None = None
+    marker = skill_dir / ".doccanon-install.json"
+    if os.path.islink(raw) or os.path.islink(skill_dir):
+        method = "symlink"
+    elif marker.is_file():
+        method = "install.py"
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            installed_version = str(payload.get("version", "unknown"))
+        except (OSError, json.JSONDecodeError):
+            installed_version = "unknown"
+    git_repo: str | None = None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(resolved), "rev-parse", "--show-toplevel"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            git_repo = result.stdout.strip()
+            if method == "unknown":
+                method = "git-clone"
+    except OSError:
+        pass
+    hints = {
+        "symlink": "Update the source checkout behind the symlink, then start a new agent session.",
+        "install.py": "Update the source checkout and rerun the same install.py command; owned copies are backed up.",
+        "git-clone": "Update this checkout and refresh any managed install; or reinstall with your host's skill manager.",
+        "unknown": "Reinstall or update with your host's skill manager, for example gh skill update for gh-managed skills.",
+    }
+    return {
+        "method": method,
+        "version": skill_version(),
+        "installed_version": installed_version,
+        "path": str(skill_dir),
+        "resolved_path": str(resolved),
+        "git_repo": git_repo,
+        "update_hint": hints[method],
+    }
+
+
 def template_path(name: str) -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / name
 
@@ -929,11 +979,12 @@ def retire_document(
 
 
 def upgrade_report(root: Path) -> dict[str, Any]:
+    install = install_provenance()
     config = load_config(root)
     if config is None:
-        return {"status": "unconfigured", "project": str(root)}
+        return {"status": "unconfigured", "project": str(root), "install": install}
     if config["status"] == "disabled":
-        return {"status": "disabled", "project": str(root)}
+        return {"status": "disabled", "project": str(root), "install": install}
     skill = skill_version()
     project_version = str(config.get("doccanon_version", "")).strip() or None
     steps: list[dict[str, Any]] = []
@@ -1035,6 +1086,7 @@ def upgrade_report(root: Path) -> dict[str, Any]:
         "skill_version": skill,
         "stamp_pending": version_pending,
         "steps": steps,
+        "install": install,
     }
 
 
@@ -1058,6 +1110,7 @@ def upgrade_apply(root: Path) -> dict[str, Any]:
             "skill_version": report["skill_version"],
             "applied": [],
             "pending_steps": [],
+            "install": report.get("install"),
         }
     if pending:
         write_config(root, config)
@@ -1069,6 +1122,7 @@ def upgrade_apply(root: Path) -> dict[str, Any]:
             "applied": applied,
             "pending_steps": pending,
             "next": "Resolve every pending step, then rerun upgrade apply. See references/upgrading.md.",
+            "install": report.get("install"),
         }
     config["doccanon_version"] = report["skill_version"]
     write_config(root, config)
@@ -1079,6 +1133,7 @@ def upgrade_apply(root: Path) -> dict[str, Any]:
         "skill_version": report["skill_version"],
         "applied": applied + ["version-stamp"],
         "pending_steps": [step for step in report["steps"] if step["kind"] == "info"],
+        "install": report.get("install"),
     }
 
 
@@ -2896,6 +2951,7 @@ def main(argv: list[str] | None = None) -> int:
                 "status": config["status"] if config else "unconfigured",
                 "project": str(root),
                 "skill_version": skill_version(),
+                "install": install_provenance(),
                 "config": config,
                 "head": git_head(root),
                 "branch": branch_context(root, config),

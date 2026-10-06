@@ -243,6 +243,7 @@ class DocCanonCLITest(unittest.TestCase):
 
         report = json.loads(self.cli(root, "upgrade", "status", "--json", check=False).stdout)
         self.assertEqual("required", report["status"])
+        self.assertEqual(report["skill_version"], report["install"]["version"])
         step_ids = {step["id"] for step in report["steps"]}
         self.assertIn("config-cleanup", step_ids)
         self.assertIn("legacy-agent-entry", step_ids)

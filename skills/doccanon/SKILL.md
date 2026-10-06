@@ -3,7 +3,7 @@ name: doccanon
 description: Keep coding agents from trusting stale project documentation by maintaining branch-aware, evidence-backed current-state contracts aligned with code and releases. Use for substantive repository work, brownfield knowledge migration, feature implementation, documentation freshness checks, commits, pull requests, and releases. Skip general Q&A, isolated snippets, and disposable prototypes.
 license: MIT
 metadata:
-  version: "0.13.0"
+  version: "0.13.1"
 ---
 
 # DocCanon
@@ -73,7 +73,7 @@ Treat a current-state document on a feature branch as true for that branch, not 
 
 ## Upgrading
 
-When the skill is newer than the project's recorded `doccanon_version`, run `upgrade status --json` and follow [references/upgrading.md](references/upgrading.md). Mechanical cleanup is idempotent; semantic steps are reviewed and never resolved by disabling checks. `upgrade apply` stamps the version only when no semantic step remains. A `project-upgrade-required` warning in `check` is a prompt, not a blocker.
+When the skill is newer than the project's recorded `doccanon_version`, run `upgrade status --json` and follow [references/upgrading.md](references/upgrading.md). Skill updates are host-level actions performed by the user or the host's package manager; never fetch, pull, or overwrite the skill from inside a project. Mechanical cleanup is idempotent; semantic steps are reviewed and never resolved by disabling checks. `upgrade apply` stamps the version only when no semantic step remains. A `project-upgrade-required` warning in `check` is a prompt, not a blocker.
 
 ## Migration
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1
+
+- Documented the two upgrade layers: host-side skill updates and project-side reconciliation; a project agent never fetches the skill.
+- `upgrade status` now reports install provenance (symlink, install.py marker, git checkout, or unknown) with an update hint.
+- Added `install.py --check` to report installed versus source skill versions without writing, exiting 1 when updates are available.
+
 ## 0.13.0
 
 - Added an explicit upgrade mechanism: `.doccanon.yml` records `doccanon_version`, `upgrade status` reports a read-only reconciliation checklist, and `upgrade apply` performs idempotent mechanical cleanup and stamps the version only when no semantic step remains.

@@ -41,6 +41,7 @@ Never call enabled, indexed, clean, or mapped documentation synchronized unless 
 ## Version compatibility
 
 - Record the reconciled skill version in `.doccanon.yml` (`doccanon_version`); a missing value means the project predates the upgrade mechanism.
+- Skill updates happen in the host layer. The project-side helper never fetches code, and nothing updates a skill automatically.
 - Treat upgrades as reviewed passes: deterministic detection, idempotent mechanical cleanup, and explicit semantic decisions. Never stamp a version while a semantic step remains.
 - Never rewrite artifacts that DocCanon did not generate; reconcile or opt out of hand-written agent entries first.
 

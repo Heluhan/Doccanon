@@ -286,6 +286,16 @@ DocCanon 不依赖运行时服务、API Key、向量数据库或特定模型。
 * Git
 * Python 3.10+
 
+### 更新 DocCanon
+
+Skill 更新和项目升级是两层。skill 副本由用户或宿主工具更新；项目里的 Agent 不会主动拉代码，也不存在自动更新。
+
+* `gh skill` 安装的：运行 `gh skill update`（GitHub CLI 预览功能）。
+* `install.py` 安装的：更新源码检出后重跑同一条安装命令，受管理的副本会先自动备份。`python3 install.py --check --json` 只报告已安装版本与源码版本的差异，不写入任何文件。
+* 符号链接的开发检出：更新链接背后的源码即可。
+
+Skill 副本更新后，在项目里运行 `doccanon upgrade status`，逐项和解清单；语义待办清空后 `upgrade apply` 才会盖上新版本号。
+
 不同 Agent 的目录位置和发现机制，见 [Agent 兼容性说明](docs/agent-compatibility.md)。
 
 ---

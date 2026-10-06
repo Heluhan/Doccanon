@@ -178,6 +178,37 @@ def uninstall(destination: Path, dry_run: bool) -> dict[str, str]:
     return {"action": "uninstall", "path": str(destination)}
 
 
+def check_install(destination: Path, agent: str, scope: str) -> dict[str, str]:
+    if not destination.exists():
+        return {
+            "agent": agent,
+            "scope": scope,
+            "action": "not-installed",
+            "path": str(destination),
+            "installed_version": "",
+            "status": "not-installed",
+        }
+    if not owned_install(destination):
+        return {
+            "agent": agent,
+            "scope": scope,
+            "action": "unmanaged",
+            "path": str(destination),
+            "installed_version": "",
+            "status": "unmanaged",
+        }
+    installed = installed_version(destination)
+    state = "up-to-date" if installed == version() else "update-available"
+    return {
+        "agent": agent,
+        "scope": scope,
+        "action": state,
+        "path": str(destination),
+        "installed_version": installed,
+        "status": state,
+    }
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Install the DocCanon agent skill")
     parser.add_argument(
@@ -190,6 +221,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--project", default=".", help="Project root for project-scoped installs")
     parser.add_argument("--home", help=argparse.SUPPRESS)
     parser.add_argument("--uninstall", action="store_true")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Report installed versions and available updates without writing; exits 1 when an update is available",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -206,6 +242,53 @@ def main(argv: list[str] | None = None) -> int:
 
     project = Path(args.project).expanduser().resolve()
     home = Path(args.home).expanduser().resolve() if args.home else Path.home()
+    if args.check:
+        if args.uninstall or args.dry_run:
+            raise InstallError("--check cannot be combined with --uninstall or --dry-run")
+        results: list[dict[str, str]] = []
+        seen: set[Path] = set()
+        for agent in agents:
+            if agent == "cursor":
+                destination = target_path("universal", "project", project, home)
+                if destination not in seen:
+                    results.append(check_install(destination, "cursor", "project"))
+                    seen.add(destination)
+                rule = cursor_rule_path(project)
+                rule_state = "ok" if rule.exists() else "missing"
+                results.append(
+                    {
+                        "agent": "cursor",
+                        "scope": "project",
+                        "action": f"rule-{rule_state}",
+                        "path": str(rule),
+                        "installed_version": "",
+                        "status": rule_state,
+                    }
+                )
+                continue
+            destination = target_path(agent, args.scope, project, home)
+            if destination in seen:
+                continue
+            results.append(check_install(destination, agent, args.scope))
+            seen.add(destination)
+        updates = [item for item in results if item["status"] == "update-available"]
+        payload = {
+            "status": "updates-available" if updates else "ok",
+            "version": version(),
+            "check": True,
+            "results": results,
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"DocCanon {payload['version']}: check")
+            for item in results:
+                detail = f" (installed {item['installed_version']})" if item.get("installed_version") else ""
+                print(f"- {item['agent']}: {item['status']}: {item['path']}{detail}")
+            if updates:
+                print("Updates are available; rerun install to refresh owned copies.")
+        return 1 if updates else 0
+
     results: list[dict[str, str]] = []
     installed_destinations: set[Path] = set()
     for agent in agents:
