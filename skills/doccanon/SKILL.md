@@ -3,7 +3,7 @@ name: doccanon
 description: Keep coding agents from trusting stale project documentation by maintaining branch-aware, evidence-backed current-state contracts aligned with code and releases. Use for substantive repository work, brownfield knowledge migration, feature implementation, documentation freshness checks, commits, pull requests, and releases. Skip general Q&A, isolated snippets, and disposable prototypes.
 license: MIT
 metadata:
-  version: "0.14.1"
+  version: "0.14.2"
 ---
 
 # DocCanon

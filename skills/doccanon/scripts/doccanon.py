@@ -320,6 +320,16 @@ def install_provenance() -> dict[str, Any]:
             installed_version = str(payload.get("version", "unknown"))
         except (OSError, json.JSONDecodeError):
             installed_version = "unknown"
+    else:
+        skill_md = skill_dir / "SKILL.md"
+        if skill_md.is_file():
+            try:
+                metadata = frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                metadata = {}
+            if str(metadata.get("github-repo", "")).strip():
+                method = "gh-skill"
+                installed_version = str(metadata.get("version", "") or "") or None
     git_repo: str | None = None
     try:
         result = subprocess.run(
@@ -337,6 +347,7 @@ def install_provenance() -> dict[str, Any]:
     hints = {
         "symlink": "Update the source checkout behind the symlink, then start a new agent session.",
         "install.py": "Update the source checkout and rerun the same install.py command; owned copies are backed up.",
+        "gh-skill": "Run gh skill update to refresh this install; pinned installs follow their pin.",
         "git-clone": "Update this checkout and refresh any managed install; or reinstall with your host's skill manager.",
         "unknown": "Reinstall or update with your host's skill manager, for example gh skill update for gh-managed skills.",
     }

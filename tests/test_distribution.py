@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -123,6 +124,34 @@ class DistributionTest(unittest.TestCase):
             run("git", "-C", str(project), "checkout", "-q", "main")
             allowed = run("python3", str(CHECKER), "main", "--project", str(project))
             self.assertEqual(0, allowed.returncode)
+
+    def test_gh_managed_copy_reports_github_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill = root / "gh-skill" / "doccanon"
+            shutil.copytree(ROOT / "skills" / "doccanon", skill)
+            skill_md = skill / "SKILL.md"
+            text = skill_md.read_text(encoding="utf-8")
+            text = text.replace(
+                "metadata:",
+                "metadata:\n    github-repo: https://github.com/Heluhan/Doccanon\n"
+                "    github-ref: refs/tags/v0.14.2",
+                1,
+            )
+            skill_md.write_text(text, encoding="utf-8")
+            target = root / "target"
+            target.mkdir()
+            payload = json.loads(
+                run(
+                    "python3", str(skill / "scripts" / "doccanon.py"), "--project", str(target),
+                    "upgrade", "status", "--json", check=False,
+                ).stdout
+            )
+            self.assertEqual("gh-skill", payload["install"]["method"])
+            self.assertEqual(
+                json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"],
+                payload["install"]["installed_version"],
+            )
 
     def test_installer_skips_local_python_caches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.14.2
+
+- `upgrade status` now recognizes GitHub CLI-managed skill installs from the injected `github-*` frontmatter and points them at `gh skill update`.
+- The publishing checklist now requires creating a GitHub Release for every tag: `gh skill` resolves the latest release, so a bare git tag is not installable by default; end-to-end verification steps were added.
+
 ## 0.14.1
 
 - Force UTF-8 output in the helper, context-measurement, and installer CLIs so non-ASCII content (for example Chinese document terms) no longer crashes when stdout uses a Windows code page; test harnesses now read subprocess output as UTF-8.
