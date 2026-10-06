@@ -40,7 +40,7 @@ When `features` applies, domain coverage requires a complete `docs/features/mani
 | `architecture/` | Modules, data, integrations, deployment topology | Product rationale |
 | `features/` | One current-state contract per shipped feature plus a registry | Temporary plans or one giant product summary |
 | `plans/` | Intended future work, milestones, launch readiness, and open gaps | Current behavior, shipped history, or accepted decisions |
-| `adr/` | Confirmed decision context, choice, trade-offs, consequences | Current-state summaries |
+| `adr/` | Confirmed decision context, choice, trade-offs, consequences; accepted records declare `doccanon_authority: append-only` | Current-state summaries |
 | `operations/` | Deployment, migration, monitoring, recovery | Product behavior |
 | `development/` | Time-bounded development milestones and verification | Current product truth |
 | `releases/` | Versioned shipped-change snapshots and known limitations | Future plans or branch-local claims |
@@ -52,7 +52,7 @@ Plans are optional. A project promotes without a current-state owner for `plans/
 ## Authority
 
 - `current-state`: synchronize when covered implementation changes.
-- `append-only`: preserve history; supersede rather than rewrite.
+- `append-only`: preserve history; supersede rather than rewrite. Accepted decision records use this authority.
 - `human-confirmed`: change only after explicit agreement.
 - `plan`: intended future work; routable, but never current truth. Update it as work progresses and retire it when the goal ships or is abandoned.
 - `generated`: regenerate from its declared source.

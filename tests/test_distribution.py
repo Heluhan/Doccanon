@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -82,6 +83,13 @@ class DistributionTest(unittest.TestCase):
         self.assertIn("Governed baseline: synchronized", output)
         self.assertIn("Code changed without its owner: stale", output)
         self.assertIn("stale-document", output)
+
+    def test_skill_and_plugin_versions_match(self) -> None:
+        plugin = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        skill = (ROOT / "skills" / "doccanon" / "SKILL.md").read_text(encoding="utf-8")
+        match = re.search(r'(?m)^\s+version:\s*"?([^"\n]+?)"?\s*$', skill)
+        self.assertIsNotNone(match)
+        self.assertEqual(plugin["version"], match.group(1).strip())
 
     def test_installer_skips_local_python_caches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

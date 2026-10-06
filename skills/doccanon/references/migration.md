@@ -2,7 +2,7 @@
 
 ## Goal
 
-Compile scattered project knowledge into a self-sufficient canonical library without requiring known legacy folder names or formats. After migration, normal work reads and maintains `CONTEXT.md` and `docs/`; legacy sources are provenance, not a second documentation system.
+Compile scattered project knowledge into a self-sufficient canonical library without requiring known legacy folder names or formats. After migration, normal work reads and maintains `CONTEXT.md` and `docs/`; legacy sources are provenance, not a second documentation system. For a project created by an older DocCanon version, use the upgrade pass in [upgrading.md](upgrading.md) instead of a fresh migration.
 
 ## Classification
 

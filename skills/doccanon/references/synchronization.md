@@ -36,6 +36,7 @@ Completion must fail when any of these remain:
 - a governed domain has no affected or excluded decision;
 - an affected domain has no changed current-state owner;
 - the generated agent entry projection is missing or stale;
+- a hand-written agent entry has not been reconciled;
 - for a release, a plan targeting the release version is not `ready` or `shipped`;
 - code and canonical freshness checks do not pass;
 - verification evidence is absent;

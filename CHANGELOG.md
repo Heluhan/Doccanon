@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.0
+
+- Added an explicit upgrade mechanism: `.doccanon.yml` records `doccanon_version`, `upgrade status` reports a read-only reconciliation checklist, and `upgrade apply` performs idempotent mechanical cleanup and stamps the version only when no semantic step remains.
+- Completion and promotion passes no longer rewrite hand-written agent entries; they block with `unreconciled-agent-entry` until the entry is reconciled via `render` or explicitly opted out.
+- Migration manifests now report frozen sources still in the tree and sources that no longer exist, with `legacy-sources-in-tree` and `migration-source-missing` check warnings.
+- Added `invalid-authority` and `unclassified-decision-record` warnings; accepted ADRs are documented as `append-only`.
+- Added a Gemini adapter (`GEMINI.md`) alongside the Claude adapter.
+- Context routing now matches CJK content through character bigrams, weights matched terms by inverse document frequency, and no longer emits a zero-match `CONTEXT.md` result.
+- Added `references/upgrading.md` with legacy categories, dispositions, and version notes.
+
 ## 0.12.0
 
 - Removed dead configuration and metadata: `.doccanon.yml` `schema_version`, `branch_policy`, and `reconsider` fields, the unused historical-authorities constant, and the unused `doccanon_plan` frontmatter field.

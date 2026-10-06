@@ -38,6 +38,12 @@ Never call enabled, indexed, clean, or mapped documentation synchronized unless 
 - Persist both acceptance and refusal in `.doccanon.yml`. A disabled project stays silent until explicitly reconsidered.
 - Separate `enabled` from `governed`; bootstrap output is not automatically trustworthy.
 
+## Version compatibility
+
+- Record the reconciled skill version in `.doccanon.yml` (`doccanon_version`); a missing value means the project predates the upgrade mechanism.
+- Treat upgrades as reviewed passes: deterministic detection, idempotent mechanical cleanup, and explicit semantic decisions. Never stamp a version while a semantic step remains.
+- Never rewrite artifacts that DocCanon did not generate; reconcile or opt out of hand-written agent entries first.
+
 ## Distribution language
 
 Write all bundled skill instructions, references, templates, tests, CLI messages, and marketplace metadata in English for global distribution. Do not embed language-specific routing rules or stop-word lists. Generated project documentation should follow the language explicitly chosen by that project; otherwise preserve the project's established documentation language.
@@ -97,6 +103,7 @@ Canonical current-state documents must be useful change contracts, not inventori
 - Write only when the projection actually changed; unchanged canonical content must produce no write, no diff, and no churn.
 - `check`, `preflight`, and Git hooks are read-only and must fail on a missing or stale projection. Refresh happens in the Agent task loop at the completion boundary, never in a commit hook.
 - Pre-existing hand-written agent instruction files are migration sources, not a parallel documentation system.
+- Automatic refresh never rewrites a pre-existing hand-written entry; completion blocks until it is reconciled or explicitly opted out.
 
 ## Optional Grill with Docs relationship
 

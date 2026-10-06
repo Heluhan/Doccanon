@@ -3,7 +3,7 @@ name: doccanon
 description: Keep coding agents from trusting stale project documentation by maintaining branch-aware, evidence-backed current-state contracts aligned with code and releases. Use for substantive repository work, brownfield knowledge migration, feature implementation, documentation freshness checks, commits, pull requests, and releases. Skip general Q&A, isolated snippets, and disposable prototypes.
 license: MIT
 metadata:
-  version: "0.12.0"
+  version: "0.13.0"
 ---
 
 # DocCanon
@@ -70,6 +70,10 @@ Treat a current-state document on a feature branch as true for that branch, not 
 ## Initialization
 
 `enable` only records project admission and creates missing entry files. When the user asks to initialize DocCanon, continue through a real bootstrap: inspect repository entry points, establish applicable domains, reconstruct the current feature inventory, create cross-cutting owners and one contract per current feature, then run `features status` and `check` and promote only when the trust gate passes. Leave uncertain intent and rationale unresolved. Read [references/feature-library.md](references/feature-library.md) for the discovery method and quality bar, and stop before repository-wide writes if the worktree is dirty or on a feature branch (see references/branching.md).
+
+## Upgrading
+
+When the skill is newer than the project's recorded `doccanon_version`, run `upgrade status --json` and follow [references/upgrading.md](references/upgrading.md). Mechanical cleanup is idempotent; semantic steps are reviewed and never resolved by disabling checks. `upgrade apply` stamps the version only when no semantic step remains. A `project-upgrade-required` warning in `check` is a prompt, not a blocker.
 
 ## Migration
 
