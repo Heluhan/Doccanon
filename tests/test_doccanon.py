@@ -276,6 +276,142 @@ class DocCanonCLITest(unittest.TestCase):
         self.assertEqual(1, len(warnings))
         self.assertEqual("warning", warnings[0]["level"])
 
+    def test_plan_authority_routes_and_renders_in_entry(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        plans = root / "docs" / "plans"
+        plans.mkdir()
+        (plans / "v1-launch.md").write_text(
+            "---\ndoccanon_authority: plan\ndoccanon_plan: v1-launch\n"
+            "doccanon_status: active\ndoccanon_target: v1.0.0\n---\n\n"
+            "# v1 launch\n\n## Goal\n\nShip the ledger seal to production with a verified rollback path.\n\n"
+            "## Release conditions\n\n- [ ] Load test passes\n",
+            encoding="utf-8",
+        )
+        rendered = json.loads(self.cli(root, "render", "--json").stdout)
+        self.assertEqual("rendered", rendered["status"])
+        entry = (root / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("Plans (future work)", entry)
+        self.assertIn("`docs/plans/v1-launch.md`", entry)
+        payload = json.loads(
+            self.cli(
+                root,
+                "context",
+                "--intent",
+                "check ledger seal launch readiness",
+                "--json",
+                check=False,
+            ).stdout
+        )
+        authorities = {item["path"]: item["authority"] for item in payload["documents"]}
+        self.assertEqual("plan", authorities.get("docs/plans/v1-launch.md"))
+
+    def test_plan_warnings_for_inactive_and_unclassified_documents(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        plans = root / "docs" / "plans"
+        plans.mkdir()
+        (plans / "done.md").write_text(
+            "---\ndoccanon_authority: plan\ndoccanon_plan: done\ndoccanon_status: shipped\n---\n\n"
+            "# Shipped plan\n\n## Goal\n\nAlready shipped.\n",
+            encoding="utf-8",
+        )
+        (plans / "drafty.md").write_text("# Drafty plan\n\nNo authority yet.\n", encoding="utf-8")
+        checked = json.loads(self.cli(root, "check", "--json", check=False).stdout)
+        by_code = {item["code"]: item for item in checked["findings"]}
+        self.assertEqual("warning", by_code["inactive-plan-not-retired"]["level"])
+        self.assertEqual("warning", by_code["unclassified-plan-document"]["level"])
+
+    def test_release_gate_requires_a_ready_plan(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        architecture = root / "docs" / "architecture.md"
+        self.write_architecture(architecture)
+        self.cli(
+            root,
+            "mark-verified",
+            "docs/architecture.md",
+            "--covers",
+            "src/**",
+            "--domain",
+            "architecture",
+        )
+        self.cli(root, "promote", "--domain", "architecture")
+        git(root, "add", ".")
+        git(root, "commit", "-qm", "govern architecture")
+
+        (root / "src" / "app.py").write_text("print('v2')\n", encoding="utf-8")
+        architecture.write_text(
+            architecture.read_text(encoding="utf-8") + "\nThe v2 behavior is now current.\n",
+            encoding="utf-8",
+        )
+        plans = root / "docs" / "plans"
+        plans.mkdir()
+        plan = plans / "v1-launch.md"
+        plan.write_text(
+            "---\ndoccanon_authority: plan\ndoccanon_plan: v1-launch\n"
+            "doccanon_status: active\ndoccanon_target: v1.0.0\n---\n\n"
+            "# v1 launch\n\n## Goal\n\nShip the ledger seal to production.\n\n"
+            "## Release conditions\n\n- [ ] Load test passes\n",
+            encoding="utf-8",
+        )
+        blocked = self.cli(
+            root,
+            "sync",
+            "complete",
+            "--title",
+            "Ledger seal v1",
+            "--summary",
+            "Prepared the ledger seal release.",
+            "--verification",
+            "python3 src/app.py passed",
+            "--release-version",
+            "v1.0.0",
+            "--release-evidence",
+            "staging deploy smoke passed",
+            "--json",
+            check=False,
+        )
+        self.assertEqual(1, blocked.returncode)
+        blocked_payload = json.loads(blocked.stdout)
+        codes = {item["code"] for item in blocked_payload["blockers"]}
+        self.assertIn("plan-not-ready-for-release", codes)
+        self.assertEqual(
+            [{"plan": "docs/plans/v1-launch.md", "status": "active", "target": "v1.0.0"}],
+            blocked_payload["release_readiness"],
+        )
+
+        plan.write_text(
+            plan.read_text(encoding="utf-8").replace("doccanon_status: active", "doccanon_status: ready"),
+            encoding="utf-8",
+        )
+        completed = json.loads(
+            self.cli(
+                root,
+                "sync",
+                "complete",
+                "--title",
+                "Ledger seal v1",
+                "--summary",
+                "Prepared the ledger seal release.",
+                "--verification",
+                "python3 src/app.py passed",
+                "--release-version",
+                "v1.0.0",
+                "--release-evidence",
+                "staging deploy smoke passed",
+                "--json",
+            ).stdout
+        )
+        self.assertEqual("synchronized", completed["status"])
+        self.assertEqual(
+            [{"plan": "docs/plans/v1-launch.md", "status": "ready", "target": "v1.0.0"}],
+            completed["release_readiness"],
+        )
+
     def test_context_prefers_governed_docs_and_excludes_history(self) -> None:
         temp, root = self.make_repo()
         self.addCleanup(temp.cleanup)

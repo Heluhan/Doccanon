@@ -14,6 +14,7 @@ This directory contains the project's governed, durable knowledge.
 | `interaction/` | User journeys, states, transitions, and failure paths |
 | `architecture/` | Modules, data, integrations, and deployment topology |
 | `features/` | Feature registry and one current-state contract per shipped feature |
+| `plans/` | Intended future work, milestones, launch readiness, and open gaps |
 | `adr/` | Confirmed decisions and trade-offs |
 | `operations/` | Deployment, migration, monitoring, and recovery |
 | `development/` | Meaningful development milestones and verification history |

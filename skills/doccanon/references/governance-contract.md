@@ -12,6 +12,7 @@ docs/
   interaction/
   architecture/
   features/
+  plans/
   adr/
   operations/
   development/
@@ -38,6 +39,7 @@ When `features` applies, domain coverage requires a complete `docs/features/mani
 | `interaction/` | Journeys, states, transitions, failure paths | Backend internals |
 | `architecture/` | Modules, data, integrations, deployment topology | Product rationale |
 | `features/` | One current-state contract per shipped feature plus a registry | Temporary plans or one giant product summary |
+| `plans/` | Intended future work, milestones, launch readiness, and open gaps | Current behavior, shipped history, or accepted decisions |
 | `adr/` | Confirmed decision context, choice, trade-offs, consequences | Current-state summaries |
 | `operations/` | Deployment, migration, monitoring, recovery | Product behavior |
 | `development/` | Time-bounded development milestones and verification | Current product truth |
@@ -45,11 +47,14 @@ When `features` applies, domain coverage requires a complete `docs/features/mani
 
 One fact has one canonical owner. Other canonical documents link to it. Migrated legacy sources are frozen provenance and are not maintained in parallel. Freezing is a DocCanon manifest/context behavior; do not add a custom enforcement system to each project. The repository-root agent entry (`AGENTS.md`) and its adapters are generated projections of these owners; they are not canonical locations and must not become a hand-maintained second source of truth.
 
+Plans are optional. A project promotes without a current-state owner for `plans/`; plans declare `doccanon_authority: plan` with a `doccanon_status` and an optional `doccanon_target`, and they never substitute for current-state behavior. When a goal ships or is abandoned, retire its plan and record the outcome in development or release history.
+
 ## Authority
 
 - `current-state`: synchronize when covered implementation changes.
 - `append-only`: preserve history; supersede rather than rewrite.
 - `human-confirmed`: change only after explicit agreement.
+- `plan`: intended future work; routable, but never current truth. Update it as work progresses and retire it when the goal ships or is abandoned.
 - `generated`: regenerate from its declared source.
 - `snapshot`: time-bounded reference; never treat as current without verification.
 

@@ -24,10 +24,11 @@ Never call enabled, indexed, clean, or mapped documentation synchronized unless 
 
 - Store durable knowledge in the owning repository: `CONTEXT.md` and `docs/`.
 - Let `CONTEXT.md` own confirmed terminology and domain boundaries, kept current-only; retired terms are removed or replaced, never accumulated as history.
-- Separate product, interaction, architecture, per-feature, decision, operations, development, and release responsibilities.
+- Separate product, interaction, architecture, per-feature, decision, plan, operations, development, and release responsibilities.
 - Give each shipped cohesive capability its own feature contract. A registry or category README is navigation, not feature documentation.
 - Keep one canonical owner per fact. Link between canonical owners instead of duplicating truth.
 - Keep development and release logs as historical snapshots, never current-state authority.
+- Keep intended future work in `plans/`: routable when relevant, but never current truth.
 - Treat the repository-root agent entry (`AGENTS.md`) and its adapters as generated projections of the canonical library, not canonical owners.
 
 ## Admission

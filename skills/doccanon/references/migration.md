@@ -32,7 +32,7 @@ Resolve each claim according to what kind of fact it asserts:
 | Deployed system or external provider state | Direct runtime, database, deployment, or provider evidence | Do not claim live state from repository evidence alone |
 | Canonical terminology or explicit product decision | Human-confirmed context or accepted decision record | Do not infer intent or rationale from code; ask or retain as unresolved/history |
 | Historical event | Versioned Git or release evidence | Preserve as historical; never promote it into current state automatically |
-| Future plan or draft | Its explicit proposal status | Keep outside current-state documents until accepted and implemented |
+| Future plan or draft | Its explicit proposal status | Keep outside current-state documents. Absorb still-intended work into `docs/plans/` with `doccanon_authority: plan`; retire obsolete plans as historical |
 
 Code wins over obsolete prose only for implementation claims that code can prove. Code does not prove why a decision was made, whether it remains intended, or what is deployed externally.
 
@@ -44,6 +44,7 @@ Code wins over obsolete prose only for implementation claims that code can prove
 | Fully current and should become a canonical owner | `move` + `integrated` | Move into the canonical tree |
 | Contains verified current knowledge missing from canonical docs | `merge` or `split` + `integrated` | Rewrite only accepted claims into owning canonical sections |
 | Mixes current and stale claims | `merge` or `split` + `integrated` | Absorb verified claims; record stale claims as rejected, never residual |
+| Still-intended future plan or roadmap | `merge` or `move` + `integrated` | Rewrite into `docs/plans/` with `doccanon_authority: plan`; never into current-state owners |
 | Conflicts with current implementation evidence | `supersede` + `superseded` | Absorb nothing from the conflict; canonical docs state verified current behavior |
 | Historical plan, snapshot, handoff, or obsolete decision record | `archive` + `historical` or `archived` | Retain only as provenance, excluded from normal context |
 | Duplicate of an existing canonical owner | `supersede` + `superseded` | No duplicate canonical content |

@@ -35,6 +35,7 @@ ENTRY_CATEGORY_LABELS = {
     "interaction": "Interaction",
     "architecture": "Architecture",
     "features": "Features",
+    "plans": "Plans (future work)",
     "adr": "Decision records (ADR)",
     "operations": "Operations",
     "development": "Development history",
@@ -45,6 +46,7 @@ ENTRY_CATEGORY_ORDER = [
     "interaction",
     "architecture",
     "features",
+    "plans",
     "adr",
     "operations",
     "development",
@@ -52,8 +54,10 @@ ENTRY_CATEGORY_ORDER = [
 ]
 ENTRY_ROUTING_ROW_LIMIT = 12
 MATURITIES = {"bootstrapping", "governed"}
-CONTEXT_AUTHORITIES = {"current-state", "human-confirmed", "append-only", "generated"}
+CONTEXT_AUTHORITIES = {"current-state", "human-confirmed", "append-only", "generated", "plan"}
 HISTORICAL_AUTHORITIES = {"snapshot", "historical", "superseded", "draft", "unclassified"}
+PLAN_STATUSES = {"active", "ready", "shipped", "abandoned"}
+RELEASABLE_PLAN_STATUSES = {"ready", "shipped"}
 REQUIRED_FEATURE_SECTIONS = {
     "user outcome",
     "scope",
@@ -495,6 +499,8 @@ class DocumentRecord:
     covers: list[str]
     domains: list[str]
     verified_at: str | None
+    plan_status: str | None = None
+    plan_target: str | None = None
 
 
 def document_records(root: Path, config: dict[str, Any]) -> list[DocumentRecord]:
@@ -508,6 +514,8 @@ def document_records(root: Path, config: dict[str, Any]) -> list[DocumentRecord]
             covers = [covers]
         if isinstance(domains, str):
             domains = [domains]
+        plan_status = meta.get("doccanon_status")
+        plan_target = meta.get("doccanon_target")
         records.append(
             DocumentRecord(
                 path=path,
@@ -516,6 +524,8 @@ def document_records(root: Path, config: dict[str, Any]) -> list[DocumentRecord]
                 covers=[str(item) for item in covers],
                 domains=[str(item) for item in domains],
                 verified_at=str(meta["doccanon_verified_at"]) if meta.get("doccanon_verified_at") else None,
+                plan_status=str(plan_status) if plan_status is not None else None,
+                plan_target=str(plan_target) if plan_target is not None else None,
             )
         )
     return records
@@ -613,6 +623,8 @@ def entry_projection(root: Path, config: dict[str, Any], kind: str) -> str:
         "  `current-state`, `human-confirmed`, `append-only`, or `generated`.",
         "- `snapshot`, `historical`, `superseded`, `draft`, and `unclassified` documents are history or",
         "  unverified material. Use them only for archaeology, never as current behavior.",
+        "- `plan` documents describe intended future work. Use them for planning and launch readiness,",
+        "  never as current behavior.",
         f"- `{docs_root}/development/` and `{docs_root}/releases/` are historical snapshots.",
     ]
     manifest = config.get("migration_manifest")
@@ -1130,6 +1142,38 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
                 context_rel,
             )
         )
+    docs_root = str(config.get("docs_root", "docs")).strip("/")
+    plans_prefix = docs_root + "/plans/"
+    for record in records:
+        if record.authority == "plan":
+            if record.plan_status in {"shipped", "abandoned"}:
+                findings.append(
+                    Finding(
+                        "warning",
+                        "inactive-plan-not-retired",
+                        "Plan is shipped or abandoned but still routed; retire it by marking "
+                        "doccanon_authority: snapshot or historical",
+                        record.relative,
+                    )
+                )
+            elif record.plan_status is not None and record.plan_status not in PLAN_STATUSES:
+                findings.append(
+                    Finding(
+                        "warning",
+                        "invalid-plan-status",
+                        f"Unknown doccanon_status {record.plan_status!r}; use active, ready, shipped, or abandoned",
+                        record.relative,
+                    )
+                )
+        elif record.relative.startswith(plans_prefix) and record.authority == "unclassified":
+            findings.append(
+                Finding(
+                    "warning",
+                    "unclassified-plan-document",
+                    "Documents under the plans area must declare doccanon_authority: plan",
+                    record.relative,
+                )
+            )
     current_state = [record for record in records if record.authority == "current-state"]
     covered_domains = sorted({domain for record in current_state for domain in record.domains})
     required_domains = sorted({str(item) for item in config.get("required_domains", [])})
@@ -1464,7 +1508,7 @@ def context_bundle(root: Path, intent: str, limit: int, include_historical: bool
     query = tokens(intent)
     ranked: list[dict[str, Any]] = []
     excluded_historical = 0
-    authority_weight = {"current-state": 60, "human-confirmed": 45, "append-only": 25, "generated": 5}
+    authority_weight = {"current-state": 60, "human-confirmed": 45, "plan": 30, "append-only": 25, "generated": 5}
     for record in document_records(root, config):
         path = record.path
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -1887,6 +1931,17 @@ def complete_sync(
         blockers.append({"code": "missing-development-record"})
     if release_version and not release_evidence:
         blockers.append({"code": "release-without-direct-evidence"})
+    plan_readiness: list[dict[str, Any]] = []
+    if release_version:
+        for record in records:
+            if record.authority != "plan" or record.plan_target != release_version:
+                continue
+            status = record.plan_status or "active"
+            plan_readiness.append({"plan": record.relative, "status": status, "target": release_version})
+            if status not in RELEASABLE_PLAN_STATUSES:
+                blockers.append(
+                    {"code": "plan-not-ready-for-release", "plan": record.relative, "status": status}
+                )
 
     agent_entry = render_agent_entries(root, config, write=True)
     checked, _ = check_project(root, base=impact["target"], staged=False)
@@ -1898,6 +1953,7 @@ def complete_sync(
             "impact": impact,
             "blockers": blockers,
             "agent_entry": agent_entry,
+            "release_readiness": plan_readiness,
             "doccanon_check": checked,
         }, 1
 
@@ -1936,6 +1992,7 @@ def complete_sync(
         "release_log": release_log,
         "history_exclusion": skip_history,
         "agent_entry": agent_entry,
+        "release_readiness": plan_readiness,
         "doccanon_check": checked,
     }, 0
 

@@ -201,6 +201,10 @@ DocCanon treats the agent entry as a **generated projection** instead:
 
 **The entry file is a view, not a second source of truth.**
 
+### Future work has a governed home
+
+Roadmaps, launch conditions, and known gaps live in `docs/plans/` with `doccanon_authority: plan`. Plans route to agents when relevant, never pretend to be shipped behavior, and a release cannot complete while a plan targeting that version is still unresolved (`active` or `abandoned`). When a goal ships, its outcome moves into release history and the plan retires.
+
 ---
 
 ## Try the failure mode

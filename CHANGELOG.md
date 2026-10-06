@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0
+
+- Added a governed plans layer (`docs/plans/`) with the `plan` authority for milestones, launch readiness, and open gaps: routable in context, never current truth.
+- Added plan lifecycle metadata (`doccanon_status`, optional `doccanon_target`) with warnings for inactive or unclassified plans.
+- Added a release gate: `sync complete --release-version` fails while a plan targeting that version is not `ready` or `shipped`.
+- Added the plan template, docs map entry, agent entry retrieval policy and routing updates, and migration guidance for roadmaps.
+- Added tests for plan routing, rendering, warnings, and the release gate (37 passing).
+
 ## 0.9.0
 
 - Added a generated agent entry projection: `AGENTS.md`, plus a thin `CLAUDE.md` adapter, rendered from current-state owners only.

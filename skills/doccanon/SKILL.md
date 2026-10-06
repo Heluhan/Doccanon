@@ -3,7 +3,7 @@ name: doccanon
 description: Keep coding agents from trusting stale project documentation by maintaining branch-aware, evidence-backed current-state contracts aligned with code and releases. Use for substantive repository work, brownfield knowledge migration, feature implementation, documentation freshness checks, commits, pull requests, and releases. Skip general Q&A, isolated snippets, and disposable prototypes.
 license: MIT
 metadata:
-  version: "0.9.0"
+  version: "0.10.0"
 ---
 
 # DocCanon
@@ -161,6 +161,14 @@ The repository-root agent entry (`AGENTS.md`, plus configured adapters such as `
 - Rendering is idempotent: unchanged canonical content means no write and no diff. Keep the user-owned custom section intact and never absorb it as truth.
 - `check` and `preflight` are read-only and fail on a missing or out-of-date projection. Run `render` after canonical updates, and let `sync complete` refresh it before its final check.
 - Pre-existing hand-written entry files are migration sources: absorb still-useful rules into canonical owners, then let the projection carry only routing, retrieval policy, and the preserved custom section.
+
+## Plans and release readiness
+
+`docs/plans/` owns intended future work: milestones, launch conditions, and known gaps. Plans declare `doccanon_authority: plan` with a `doccanon_status` (`active`, `ready`, `shipped`, or `abandoned`) and an optional `doccanon_target`. They route to agents when relevant and are never current truth.
+
+- Keep an active plan current when a task advances it. Completed items link to their canonical owner instead of restating behavior.
+- A plan targeting a release version must reach `ready` or `shipped` before `sync complete --release-version` can pass.
+- When a goal ships or is abandoned, record the outcome in development or release history and retire the plan by changing its authority, not by leaving a stale checklist active.
 
 ## Completion
 

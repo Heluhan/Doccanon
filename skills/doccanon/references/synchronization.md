@@ -22,7 +22,7 @@ Do not interpret an unmapped file as having no documentation impact. Review it s
 
 Review every configured domain even when path coverage did not infer an impact. Mark a domain affected when behavior, boundaries, states, failure modes, invariants, dependencies, operations, or user experience changed. Update at least one current-state owner for every affected domain.
 
-Exclude an unaffected domain with a concrete reason. A generic statement such as "not applicable" is not a review. Inferred affected domains cannot be excluded while their covered implementation changed.
+Exclude an unaffected domain with a concrete reason. A generic statement such as "not applicable" is not a review. Inferred affected domains cannot be excluded while their covered implementation changed. Plans and generated entries are not current-state owners; updating them does not satisfy a domain review.
 
 ## Completion gate
 
@@ -35,6 +35,7 @@ Completion must fail when any of these remain:
 - a governed domain has no affected or excluded decision;
 - an affected domain has no changed current-state owner;
 - the generated agent entry projection is missing or stale;
+- for a release, a plan targeting the release version is not `ready` or `shipped`;
 - code and canonical freshness checks do not pass;
 - verification evidence is absent;
 - a meaningful milestone has no development record or justified history exclusion;
