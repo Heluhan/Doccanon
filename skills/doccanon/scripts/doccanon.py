@@ -3135,6 +3135,17 @@ def manage_hook(root: Path, action: str) -> dict[str, Any]:
     return {"status": "installed", "path": str(path)}
 
 
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            pass
+
+
 def print_result(result: dict[str, Any], as_json: bool) -> None:
     if as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -3294,6 +3305,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_stdio()
     args = build_parser().parse_args(argv)
     root = project_root(args.project)
     try:

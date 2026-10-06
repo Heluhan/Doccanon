@@ -83,8 +83,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (OSError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    configure_stdio()
     project = Path(args.project).expanduser().resolve()
     helper = load_doccanon()
     bundle = helper.context_bundle(project, args.intent, args.limit, include_historical=False)

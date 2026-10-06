@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.14.1
+
+- Force UTF-8 output in the helper, context-measurement, and installer CLIs so non-ASCII content (for example Chinese document terms) no longer crashes when stdout uses a Windows code page; test harnesses now read subprocess output as UTF-8.
+
 ## 0.14.0
 
 - Added the generated owner registry (`docs/registry.json`): routable owners are enumerated in one machine-readable file, `check` fails on missing, stale, or outdated entries, and `sync complete`, `promote`, and `upgrade` refresh it.

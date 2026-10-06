@@ -1,12 +1,12 @@
 # Publishing checklist
 
-DocCanon 0.14.0 is structured as a GitHub Agent Skills repository. Before the first public release:
+DocCanon 0.14.1 is structured as a GitHub Agent Skills repository. Before the first public release:
 
 1. Publish from the canonical repository at `https://github.com/Heluhan/Doccanon`.
 2. Keep the public maintainer identity `Heluhan` and security contact `contact@planana.xyz` current.
 3. Run `python3 -m unittest discover -s tests -v` on Linux, macOS, and Windows through GitHub Actions.
 4. With GitHub CLI 2.90 or later, run `gh skill publish --dry-run` and inspect every warning. Preview the repository from a separate checkout before installing it.
-5. Bump the version only in the release commit on `main`, then tag `v0.14.0`. Branches never carry version bumps; `main` and the tag are the single version source.
+5. Bump the version only in the release commit on `main`, then tag `v0.14.1`. Branches never carry version bumps; `main` and the tag are the single version source.
 6. Record one real brownfield setup walkthrough. Show the repository state before initialization, the trust gate, one stale-code failure, the corrected owner, and the final `synchronized` output.
 7. Do not publish a token-savings percentage until the paired protocol in `skills/doccanon/references/token-benchmark.md` reaches its reporting gate. Publish the task set and raw anonymized run table with the summary.
 

@@ -13,7 +13,15 @@ SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills" / "doccanon"
 
 
 def run(command: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     if check and result.returncode != 0:
         raise AssertionError(result.stdout + result.stderr)
     return result

@@ -19,7 +19,14 @@ MEASURE = ROOT / "skills" / "doccanon" / "scripts" / "measure_context.py"
 
 
 def run(*command: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    result = subprocess.run(
+        command,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     if check and result.returncode != 0:
         raise AssertionError(result.stdout + result.stderr)
     return result

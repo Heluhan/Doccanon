@@ -1,6 +1,6 @@
 {
   "name": "doccanon",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Verified, branch-aware project memory that stops coding agents from trusting stale documentation.",
   "author": {
     "name": "Heluhan"
