@@ -33,7 +33,7 @@ When `features` applies, domain coverage requires a complete `docs/features/mani
 
 | Area | Owns | Does not own |
 |---|---|---|
-| `CONTEXT.md` | Canonical terms and domain boundaries | Implementation detail |
+| `CONTEXT.md` | Canonical terms and domain boundaries, kept current-only | Implementation detail, history, or retired definitions |
 | `product/` | Users, capabilities, product boundaries | Component structure |
 | `interaction/` | Journeys, states, transitions, failure paths | Backend internals |
 | `architecture/` | Modules, data, integrations, deployment topology | Product rationale |
@@ -43,7 +43,7 @@ When `features` applies, domain coverage requires a complete `docs/features/mani
 | `development/` | Time-bounded development milestones and verification | Current product truth |
 | `releases/` | Versioned shipped-change snapshots and known limitations | Future plans or branch-local claims |
 
-One fact has one canonical owner. Other canonical documents link to it. Migrated legacy sources are frozen provenance and are not maintained in parallel. Freezing is a DocCanon manifest/context behavior; do not add a custom enforcement system to each project.
+One fact has one canonical owner. Other canonical documents link to it. Migrated legacy sources are frozen provenance and are not maintained in parallel. Freezing is a DocCanon manifest/context behavior; do not add a custom enforcement system to each project. The repository-root agent entry (`AGENTS.md`) and its adapters are generated projections of these owners; they are not canonical locations and must not become a hand-maintained second source of truth.
 
 ## Authority
 
@@ -54,6 +54,8 @@ One fact has one canonical owner. Other canonical documents link to it. Migrated
 - `snapshot`: time-bounded reference; never treat as current without verification.
 
 `human-confirmed` may be assigned only after the user explicitly confirms the content. Agent authorship, file age, and Git history do not establish human confirmation.
+
+The project context file (`CONTEXT.md`) is `human-confirmed` canonical language. Agents add or change entries only after the user confirms the term or decision. Keep it current-only: update changed meanings and remove retired terms; a one-line replacement mapping may remain while legacy references still need decoding, but a retired definition may not.
 
 ## Current-state contract
 

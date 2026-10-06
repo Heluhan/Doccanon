@@ -3,7 +3,7 @@ name: doccanon
 description: Keep coding agents from trusting stale project documentation by maintaining branch-aware, evidence-backed current-state contracts aligned with code and releases. Use for substantive repository work, brownfield knowledge migration, feature implementation, documentation freshness checks, commits, pull requests, and releases. Skip general Q&A, isolated snippets, and disposable prototypes.
 license: MIT
 metadata:
-  version: "0.8.0"
+  version: "0.9.0"
 ---
 
 # DocCanon
@@ -42,11 +42,11 @@ For every substantive task in an enabled project:
 1. Run `branch status --json`, then `check --json`, before trusting project docs. Treat synchronization as relative to the reported branch and base. `bootstrap-incomplete` means the library is not a trusted substitute for code inspection.
 2. If relevant docs are stale, synchronize them against code and Git evidence before planning the new change. Resolve authority conflicts with the user; never silently select a winner.
 3. Run `context --intent "<task>" --json`. By default it excludes snapshots, plans, superseded material, and unclassified docs. Read returned canonical docs, then only the code needed to verify or implement the task. Use `--include-historical` only for archaeology.
-4. Record confirmed new terminology and decisions before implementation. Use `CONTEXT.md` for canonical language, current-state docs for accepted behavior, and ADRs only for hard-to-reverse, surprising trade-offs.
+4. Record confirmed new terminology and decisions before implementation. Use `CONTEXT.md` for canonical language, current-state docs for accepted behavior, and ADRs only for hard-to-reverse, surprising trade-offs. Keep `CONTEXT.md` current-only: update changed meanings and remove or replace retired terms instead of appending their history.
 5. Implement and verify the code change.
 6. Run `sync plan --json`. Review every affected feature, current-state owner, unmapped implementation file, and governed domain. Do not let an unmapped file silently pass. Create or update the owning feature and cross-cutting documents, or record a concrete file-level or domain-level exclusion receipt.
 7. Rerun the plan until every implementation change is mapped or explicitly excluded. For a new cohesive user or operator capability, create its feature contract and manifest mapping even when no prior document predicted it.
-8. Run `sync complete` with the actual verification and semantic review decisions. Let it enforce owner updates, domain coverage, unmapped-file receipts, freshness, and automatic development or release history. Do not ask the user to run DocCanon commands.
+8. Run `sync complete` with the actual verification and semantic review decisions. Let it enforce owner updates, domain coverage, unmapped-file receipts, freshness, automatic development or release history, and the generated agent entry projection. Do not ask the user to run DocCanon commands.
 9. Before a PR or merge, run `preflight --target <integration-branch>`. Report stale or unresolved documents honestly. Claim synchronized only when `sync complete` and `check` pass.
 
 `grill-with-docs` is an optional companion, not a dependency. When available, hand complex terminology or decision clarification to it. Consume the resulting `CONTEXT.md` or ADR changes afterward. Never copy, fork, or modify that skill.
@@ -152,6 +152,15 @@ doccanon_domains:
 ```
 
 The helper detects covered code changes that are not accompanied by a document update. Updating a document alongside code produces `pending-sync`; semantic verification is still the Agent's responsibility. The synchronization gate additionally blocks every unmapped implementation file and requires an explicit decision for every governed domain.
+
+## Agent entry projection
+
+The repository-root agent entry (`AGENTS.md`, plus configured adapters such as `CLAUDE.md`) is a generated view over the canonical library, not a canonical owner. Hosts load it at session start, so it must never become a second, hand-maintained source of truth.
+
+- Render it from current-state owners only. Historical, retired, draft, and unclassified material never enters it by construction.
+- Rendering is idempotent: unchanged canonical content means no write and no diff. Keep the user-owned custom section intact and never absorb it as truth.
+- `check` and `preflight` are read-only and fail on a missing or out-of-date projection. Run `render` after canonical updates, and let `sync complete` refresh it before its final check.
+- Pre-existing hand-written entry files are migration sources: absorb still-useful rules into canonical owners, then let the projection carry only routing, retrieval policy, and the preserved custom section.
 
 ## Completion
 

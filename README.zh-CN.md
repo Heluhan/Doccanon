@@ -194,6 +194,19 @@ DocCanon **不会取代源码检查**。
 
 > **先看地图，再核对真实地形。**
 
+### Agent 入口文件是生成物，不是手写笔记
+
+Codex、Cursor、GitHub Copilot、OpenCode 会在 session 启动时读取 `AGENTS.md`；Claude Code 会直接读取它，或通过一个薄 `CLAUDE.md` import 读取。它是每个 Agent 最先看到的内容，所以入口文件里一段过期或已退役的文字，会污染每个 session。
+
+DocCanon 把入口文件当作**生成投影**：
+
+* `AGENTS.md` 只从已验证的 current-state owner 渲染；退役、历史、draft、未分类的内容在构造上不会进入。
+* 渲染是幂等的：canonical 内容没变就不写盘、不产生 diff、不制造噪音。
+* `check` / `preflight` 是只读的，投影缺失或过期会直接失败；`sync complete` 会在 canonical 更新后自动刷新。
+* 文件末尾的用户自定义区原样保留，项目或工具特定笔记不会在重新生成时丢失。
+
+**入口文件是视图，不是第二个真实信息源。**
+
 ---
 
 ## 试试看它如何发现过期上下文

@@ -16,6 +16,7 @@ Do not interpret an unmapped file as having no documentation impact. Review it s
 - If it introduces or materially changes a cohesive user or operator capability, create or update its feature contract and feature-manifest entry. Add accurate code patterns so rerunning the plan maps the file.
 - If it changes a shared interaction, architecture, product, or operations boundary, update the corresponding current-state owner and its coverage metadata.
 - Exclude it only when it has no durable semantic effect, such as a fixture, formatting-only change, or generated artifact. Record a concrete file-level reason.
+- Generated agent entry files (`AGENTS.md` and configured adapters) are projections rather than implementation. The helper keeps them out of the implementation map; the user-owned custom section is never treated as current truth.
 
 ## Domain review
 
@@ -33,12 +34,13 @@ Completion must fail when any of these remain:
 - an implementation file is unmapped and has no file-level exclusion receipt;
 - a governed domain has no affected or excluded decision;
 - an affected domain has no changed current-state owner;
+- the generated agent entry projection is missing or stale;
 - code and canonical freshness checks do not pass;
 - verification evidence is absent;
 - a meaningful milestone has no development record or justified history exclusion;
 - a release claim lacks direct release evidence.
 
-On success, append the development record automatically with its documentation-impact receipt. If the task is a verified release, also write the release record. Repeated completion is idempotent.
+On success, append the development record automatically with its documentation-impact receipt and refresh the agent entry projection when its content changed. If the task is a verified release, also write the release record. Repeated completion is idempotent.
 
 ## Read-only boundaries
 

@@ -188,6 +188,19 @@ It changes where the agent starts.
 
 > **Read the map first. Verify against the territory.**
 
+### Agent entry files are generated, not hand-maintained
+
+Codex, Cursor, GitHub Copilot, and OpenCode read `AGENTS.md` at session start; Claude Code reads it directly or through a thin `CLAUDE.md` import. That file is the first thing every agent sees, so one stale or retired paragraph there can poison every session.
+
+DocCanon treats the agent entry as a **generated projection** instead:
+
+* `AGENTS.md` is rendered from verified current-state owners only. Retired, historical, draft, or unclassified material never enters it by construction.
+* Rendering is idempotent: if canonical content did not change, nothing is written and no diff appears.
+* `check` and `preflight` are read-only and fail on a missing or out-of-date projection; `sync complete` refreshes it after canonical updates.
+* The user-owned custom section at the end is preserved verbatim, so project- or tool-specific notes survive regeneration.
+
+**The entry file is a view, not a second source of truth.**
+
 ---
 
 ## Try the failure mode

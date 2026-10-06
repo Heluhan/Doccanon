@@ -17,6 +17,7 @@ Classify content semantically as one or more of:
 - operational procedure
 - future plan or draft
 - time-bounded snapshot or handoff
+- agent instruction or host-specific memory rules
 - duplicate, stale, conflicting, or unknown
 
 Review every candidate. Review is an evidence-backed terminal decision, not a requirement to copy its content. A migration may legitimately absorb none of the candidates when all are stale, historical, duplicate, irrelevant, or scanner false positives.
@@ -111,10 +112,11 @@ Before promotion:
 
 1. Read each material source completely enough to decide whether it contains durable current knowledge. Do not deeply analyze executable scanner false positives after confirming their type.
 2. Resolve duplicates and conflicts against current code and human-confirmed decisions.
-3. Rewrite accepted claims into the owning canonical contracts using the project's terminology. Do not paste incompatible legacy vocabulary verbatim.
+3. Rewrite accepted claims into the owning canonical contracts using the project's terminology. Do not paste incompatible legacy vocabulary verbatim. Rewrite `CONTEXT.md` current-only: absorbed terminology replaces legacy definitions, and retired vocabulary becomes at most a one-line replacement mapping.
 4. Record claim-level integration receipts in the manifest.
 5. Freeze absorbed legacy documents in the manifest. Add a short replacement notice only to misleading high-traffic legacy entry points; do not rewrite every old source and do not add a repository-specific freeze script.
 6. Test a realistic task using only `context --intent` and canonical documents. If the task still requires a legacy source to understand normal current behavior, migration is incomplete.
+7. Treat pre-existing repository-root agent instruction files (`AGENTS.md`, `CLAUDE.md`, and host-specific memory rules) as migration sources. Absorb still-useful rules into canonical owners; the generated projection preserves the remainder in its user-owned custom section and never treats it as current truth.
 
 ## Safety
 

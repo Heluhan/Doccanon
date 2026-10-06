@@ -21,6 +21,36 @@ from typing import Any, Iterable
 CONFIG_NAME = ".doccanon.yml"
 DEFAULT_MIGRATION_MANIFEST = "docs/operations/doccanon-migration.json"
 DEFAULT_FEATURE_MANIFEST = "docs/features/manifest.json"
+DEFAULT_AGENT_ENTRY = "AGENTS.md"
+DEFAULT_AGENT_ADAPTERS = ("claude",)
+AGENT_ADAPTER_FILES = {"claude": "CLAUDE.md"}
+ENTRY_CUSTOM_START = "<!-- doccanon:custom:start -->"
+ENTRY_CUSTOM_END = "<!-- doccanon:custom:end -->"
+DEFAULT_CUSTOM_HINT = (
+    "<!-- Add project- or tool-specific notes here. DocCanon preserves this section "
+    "verbatim and does not verify it. Keep durable project knowledge in CONTEXT.md and docs/. -->"
+)
+ENTRY_CATEGORY_LABELS = {
+    "product": "Product",
+    "interaction": "Interaction",
+    "architecture": "Architecture",
+    "features": "Features",
+    "adr": "Decision records (ADR)",
+    "operations": "Operations",
+    "development": "Development history",
+    "releases": "Release history",
+}
+ENTRY_CATEGORY_ORDER = [
+    "product",
+    "interaction",
+    "architecture",
+    "features",
+    "adr",
+    "operations",
+    "development",
+    "releases",
+]
+ENTRY_ROUTING_ROW_LIMIT = 12
 MATURITIES = {"bootstrapping", "governed"}
 CONTEXT_AUTHORITIES = {"current-state", "human-confirmed", "append-only", "generated"}
 HISTORICAL_AUTHORITIES = {"snapshot", "historical", "superseded", "draft", "unclassified"}
@@ -161,6 +191,8 @@ def dump_config(data: dict[str, Any]) -> str:
         "required_domains",
         "migration_manifest",
         "feature_manifest",
+        "agent_entry",
+        "agent_adapters",
         "branch_policy",
         "integration_branch",
         "release_branches",
@@ -201,11 +233,27 @@ def load_config(root: Path) -> dict[str, Any] | None:
         if data["maturity"] not in MATURITIES:
             raise DocCanonError(f"Invalid maturity in {CONFIG_NAME}")
         data.setdefault("required_domains", [])
+        data.setdefault("agent_entry", DEFAULT_AGENT_ENTRY)
+        data.setdefault("agent_adapters", list(DEFAULT_AGENT_ADAPTERS))
         data.setdefault("branch_policy", "aware")
         data.setdefault("release_branches", [])
         data.setdefault("development_log_root", "docs/development")
         data.setdefault("release_log_root", "docs/releases")
     return data
+
+
+def config_list(config: dict[str, Any], key: str, default: list[str]) -> list[str]:
+    value = config.get(key, default)
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped in {"", "[]"}:
+            return []
+        return [stripped]
+    return [str(value)]
 
 
 def write_config(root: Path, data: dict[str, Any]) -> None:
@@ -248,12 +296,14 @@ def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = F
     if branch["dirty"] and not allow_dirty:
         raise DocCanonError("Refusing initialization in a dirty worktree; isolate or finish existing work, or pass --allow-dirty explicitly")
     config = {
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "enabled",
         "maturity": "bootstrapping",
         "docs_root": "docs",
         "context_file": "CONTEXT.md",
         "required_domains": [],
+        "agent_entry": DEFAULT_AGENT_ENTRY,
+        "agent_adapters": list(DEFAULT_AGENT_ADAPTERS),
         "branch_policy": "aware",
         "integration_branch": branch["integration_branch"],
         "release_branches": branch["release_branches"],
@@ -264,7 +314,15 @@ def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = F
     }
     write_config(root, config)
     created = ensure_base_docs(root, config)
-    return {"status": "enabled", "config": CONFIG_NAME, "created": created, "branch": branch}
+    projected = render_agent_entries(root, config, write=True)
+    created.extend(item["path"] for item in projected["files"] if item["changed"])
+    return {
+        "status": "enabled",
+        "config": CONFIG_NAME,
+        "created": created,
+        "branch": branch,
+        "agent_entry": projected,
+    }
 
 
 def disable(root: Path, reason: str) -> dict[str, Any]:
@@ -461,6 +519,194 @@ def document_records(root: Path, config: dict[str, Any]) -> list[DocumentRecord]
             )
         )
     return records
+
+
+def normalize_relative_path(value: str, label: str) -> str:
+    stripped = value.strip()
+    if not stripped:
+        raise DocCanonError(f"{label} must name a project-relative file")
+    candidate = Path(stripped)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise DocCanonError(f"{label} must stay inside the project")
+    return candidate.as_posix()
+
+
+def agent_entry_targets(config: dict[str, Any]) -> list[tuple[str, str]]:
+    entry = str(config.get("agent_entry", DEFAULT_AGENT_ENTRY)).strip()
+    if not entry:
+        return []
+    targets: list[tuple[str, str]] = [(normalize_relative_path(entry, "agent_entry"), "entry")]
+    for adapter in config_list(config, "agent_adapters", list(DEFAULT_AGENT_ADAPTERS)):
+        filename = AGENT_ADAPTER_FILES.get(adapter)
+        if not filename:
+            continue
+        if all(path != filename for path, _ in targets):
+            targets.append((filename, "adapter"))
+    return targets
+
+
+def entry_routing_rows(root: Path, config: dict[str, Any]) -> list[tuple[str, str]]:
+    docs_root = str(config.get("docs_root", "docs")).strip("/")
+    prefix = docs_root + "/"
+    groups: dict[str, list[str]] = {}
+    for record in document_records(root, config):
+        if record.authority not in CONTEXT_AUTHORITIES:
+            continue
+        if not record.relative.startswith(prefix):
+            continue
+        rest = record.relative[len(prefix):]
+        category = rest.split("/", 1)[0] if "/" in rest else ""
+        groups.setdefault(category, []).append(record.relative)
+    ordered = [category for category in ENTRY_CATEGORY_ORDER if category in groups]
+    ordered.extend(sorted(category for category in groups if category not in ENTRY_CATEGORY_ORDER))
+    rows: list[tuple[str, str]] = []
+    for category in ordered:
+        if category:
+            readme = f"{docs_root}/{category}/README.md"
+            label = ENTRY_CATEGORY_LABELS.get(category, category.replace("-", " ").replace("_", " ").title())
+        else:
+            readme = f"{docs_root}/README.md"
+            label = "General"
+        paths = [path for path in sorted(groups[category]) if path != readme]
+        if not paths:
+            continue
+        if category and readme in groups[category]:
+            rows.append((label, f"`{readme}`"))
+            continue
+        shown = paths[:3]
+        value = ", ".join(f"`{path}`" for path in shown)
+        if len(paths) > len(shown):
+            value += f" (+{len(paths) - len(shown)} more via `{docs_root}/README.md`)"
+        rows.append((label, value))
+    return rows
+
+
+def entry_projection(root: Path, config: dict[str, Any], kind: str) -> str:
+    context_file = str(config.get("context_file", "CONTEXT.md"))
+    docs_root = str(config.get("docs_root", "docs")).strip("/")
+    if kind == "adapter":
+        entry = agent_entry_targets(config)[0][0]
+        return (
+            "<!-- Generated by DocCanon. Imports the shared agent entry. "
+            "Do not edit outside the custom section. -->\n"
+            f"@{entry}\n"
+        )
+    lines = [
+        "<!-- Generated by DocCanon from the canonical library. Do not edit outside the custom section. -->",
+        "",
+        "# Coding agent entry",
+        "",
+        "This file is a generated projection of the project's governed knowledge. It owns no facts.",
+        f"Durable knowledge lives in `{context_file}` and `{docs_root}/`; code, tests, configuration, and",
+        "runtime evidence remain the proof of current behavior.",
+        "",
+        "## Task context protocol",
+        "",
+        "Before substantive work, load only the smallest canonical context relevant to the task, then inspect",
+        "the code needed to verify or implement it. If the DocCanon skill is available, follow its task loop.",
+        f"Otherwise, read `{context_file}` and `{docs_root}/README.md`, follow the owning area, and never",
+        "treat retired material as current behavior.",
+        "",
+        "## Retrieval policy",
+        "",
+        "- A document is current state only when its frontmatter declares `doccanon_authority:`",
+        "  `current-state`, `human-confirmed`, `append-only`, or `generated`.",
+        "- `snapshot`, `historical`, `superseded`, `draft`, and `unclassified` documents are history or",
+        "  unverified material. Use them only for archaeology, never as current behavior.",
+        f"- `{docs_root}/development/` and `{docs_root}/releases/` are historical snapshots.",
+    ]
+    manifest = config.get("migration_manifest")
+    if manifest:
+        lines.append(f"- Frozen legacy sources and their evidence: `{manifest}`.")
+    lines.extend(
+        [
+            "",
+            "## Where to read first",
+            "",
+            "| Area | Canonical owner |",
+            "| --- | --- |",
+            f"| Canonical terminology and domain boundaries | `{context_file}` |",
+        ]
+    )
+    rows = entry_routing_rows(root, config)
+    for label, value in rows[:ENTRY_ROUTING_ROW_LIMIT]:
+        lines.append(f"| {label} | {value} |")
+    if len(rows) > ENTRY_ROUTING_ROW_LIMIT:
+        lines.append(f"| More areas | `{docs_root}/README.md` |")
+    lines.append(f"| Documentation map | `{docs_root}/README.md` |")
+    return "\n".join(lines) + "\n"
+
+
+def extract_custom_section(text: str, label: str) -> str:
+    start = text.find(ENTRY_CUSTOM_START)
+    end = text.find(ENTRY_CUSTOM_END)
+    if start < 0 and end < 0:
+        return text.strip("\n")
+    if start < 0 or end < 0 or end < start:
+        raise DocCanonError(
+            f"{label} has an incomplete DocCanon custom section; keep both markers as a pair"
+        )
+    return text[start + len(ENTRY_CUSTOM_START):end].strip("\n")
+
+
+def custom_section(body: str) -> str:
+    body = body.strip("\n")
+    if not body:
+        return f"{ENTRY_CUSTOM_START}\n{ENTRY_CUSTOM_END}\n"
+    return f"{ENTRY_CUSTOM_START}\n{body}\n{ENTRY_CUSTOM_END}\n"
+
+
+def compose_agent_entry(existing: str | None, projection: str, kind: str, label: str) -> str:
+    if existing is None:
+        custom = DEFAULT_CUSTOM_HINT
+    else:
+        custom = extract_custom_section(existing, label)
+    heading = "## Tool-specific notes (user-owned)" if kind == "adapter" else "## Project-specific notes (user-owned)"
+    return projection.rstrip() + "\n\n" + heading + "\n\n" + custom_section(custom)
+
+
+def render_agent_entries(root: Path, config: dict[str, Any], write: bool) -> dict[str, Any]:
+    files: list[dict[str, Any]] = []
+    changed_any = False
+    for relative, kind in agent_entry_targets(config):
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as exc:
+            raise DocCanonError(f"Agent entry must stay inside the project: {relative}") from exc
+        existing = path.read_text(encoding="utf-8") if path.is_file() else None
+        rendered = compose_agent_entry(existing, entry_projection(root, config, kind), kind, relative)
+        changed = existing != rendered
+        if changed:
+            changed_any = True
+            if write:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(rendered, encoding="utf-8")
+        files.append(
+            {
+                "path": relative,
+                "kind": kind,
+                "exists": existing is not None,
+                "changed": changed,
+            }
+        )
+    if write:
+        status = "rendered" if changed_any else "current"
+    else:
+        status = "drift" if changed_any else "current"
+    return {"status": status, "files": files}
+
+
+def render_command(root: Path, check: bool) -> tuple[dict[str, Any], int]:
+    config = load_config(root)
+    if config is None:
+        return {"status": "unconfigured", "project": str(root), "files": []}, 0
+    if config["status"] == "disabled":
+        return {"status": "disabled", "project": str(root), "files": []}, 0
+    result = render_agent_entries(root, config, write=not check)
+    result["project"] = str(root)
+    result["check"] = check
+    return result, 1 if result["status"] == "drift" else 0
 
 
 def revision_exists(root: Path, revision: str) -> bool:
@@ -845,8 +1091,45 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
             findings.append(Finding("error", "missing-canonical-file", f"Missing {path.relative_to(root)}"))
 
     current_changes = changed_files(root, base=base, staged=staged)
+    entry_targets = agent_entry_targets(config)
+    entry_paths = {relative for relative, _ in entry_targets}
+    current_changes = {item for item in current_changes if item not in entry_paths}
+    projection = render_agent_entries(root, config, write=False)
+    for item in projection["files"]:
+        if not item["changed"]:
+            continue
+        if item["exists"]:
+            findings.append(
+                Finding(
+                    "error",
+                    "stale-agent-entry",
+                    "Agent entry projection is out of date; rerun render",
+                    item["path"],
+                )
+            )
+        else:
+            findings.append(
+                Finding(
+                    "error",
+                    "missing-agent-entry",
+                    "Agent entry projection is missing; run render",
+                    item["path"],
+                )
+            )
     records = document_records(root, config)
     doc_paths = {record.relative for record in records}
+    context_rel = str(config.get("context_file", "CONTEXT.md"))
+    context_record = next((record for record in records if record.relative == context_rel), None)
+    if context_record is not None and context_record.authority not in CONTEXT_AUTHORITIES:
+        findings.append(
+            Finding(
+                "warning",
+                "unconfirmed-context-file",
+                "Context file has no confirmed authority; confirm its terminology and mark it "
+                "doccanon_authority: human-confirmed, or rewrite it during migration",
+                context_rel,
+            )
+        )
     current_state = [record for record in records if record.authority == "current-state"]
     covered_domains = sorted({domain for record in current_state for domain in record.domains})
     required_domains = sorted({str(item) for item in config.get("required_domains", [])})
@@ -884,9 +1167,17 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
             continue
         verified_documents += 1
 
-        relevant = {item for item in current_changes if item not in doc_paths and match_any(item, record.covers)}
+        relevant = {
+            item
+            for item in current_changes
+            if item not in doc_paths and item not in entry_paths and match_any(item, record.covers)
+        }
         if not staged and not base:
-            relevant.update(item for item in diff_since(root, anchor) if item not in doc_paths and match_any(item, record.covers))
+            relevant.update(
+                item
+                for item in diff_since(root, anchor)
+                if item not in doc_paths and item not in entry_paths and match_any(item, record.covers)
+            )
 
         if relevant and rel not in current_changes:
             findings.append(
@@ -1328,7 +1619,7 @@ def promote(
             )
     config.update(
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "maturity": "governed",
             "required_domains": required_domains,
             "migration_manifest": manifest,
@@ -1336,6 +1627,7 @@ def promote(
         }
     )
     write_config(root, config)
+    render_agent_entries(root, config, write=True)
     checked, _ = check_project(root, base=None, staged=False)
     if checked["status"] != "synchronized":
         config["maturity"] = "bootstrapping"
@@ -1360,6 +1652,8 @@ def preflight(root: Path, target: str | None) -> tuple[dict[str, Any], int]:
         raise DocCanonError(f"Cannot resolve preflight target: {base_ref}")
     checked, _ = check_project(root, base=base_ref, staged=False)
     changed = changed_files(root, base=base_ref, staged=False)
+    entry_paths = {relative for relative, _ in agent_entry_targets(config)}
+    changed = {item for item in changed if item not in entry_paths}
     affected: list[dict[str, Any]] = []
     stale_features: list[str] = []
     feature_manifest = str(config.get("feature_manifest", DEFAULT_FEATURE_MANIFEST))
@@ -1429,10 +1723,14 @@ def documentation_impact(root: Path, target: str | None) -> dict[str, Any]:
     changed = changed_files(root, base=base_ref, staged=False)
     docs_root = str(config.get("docs_root", "docs")).rstrip("/") + "/"
     context_file = str(config.get("context_file", "CONTEXT.md"))
+    entry_paths = {relative for relative, _ in agent_entry_targets(config)}
     implementation_files = sorted(
         path
         for path in changed
-        if path != CONFIG_NAME and path != context_file and not path.startswith(docs_root)
+        if path != CONFIG_NAME
+        and path != context_file
+        and path not in entry_paths
+        and not path.startswith(docs_root)
     )
 
     feature_patterns: list[str] = []
@@ -1590,6 +1888,7 @@ def complete_sync(
     if release_version and not release_evidence:
         blockers.append({"code": "release-without-direct-evidence"})
 
+    agent_entry = render_agent_entries(root, config, write=True)
     checked, _ = check_project(root, base=impact["target"], staged=False)
     if checked["status"] != "synchronized":
         blockers.append({"code": "doccanon-check", "status": checked["status"]})
@@ -1598,6 +1897,7 @@ def complete_sync(
             "status": "blocked",
             "impact": impact,
             "blockers": blockers,
+            "agent_entry": agent_entry,
             "doccanon_check": checked,
         }, 1
 
@@ -1635,6 +1935,7 @@ def complete_sync(
         "development_log": development_log,
         "release_log": release_log,
         "history_exclusion": skip_history,
+        "agent_entry": agent_entry,
         "doccanon_check": checked,
     }, 0
 
@@ -1904,6 +2205,10 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--include-historical", action="store_true")
     item.add_argument("--json", action="store_true")
 
+    item = sub.add_parser("render")
+    item.add_argument("--check", action="store_true")
+    item.add_argument("--json", action="store_true")
+
     item = sub.add_parser("mark-verified")
     item.add_argument("document")
     item.add_argument("--covers", action="append")
@@ -2013,6 +2318,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "context":
             result = context_bundle(root, args.intent, args.limit, args.include_historical)
             exit_code = 0 if result["status"] == "synchronized" else 1
+        elif args.command == "render":
+            result, exit_code = render_command(root, args.check)
         elif args.command == "mark-verified":
             result, exit_code = mark_verified(root, args.document, args.covers, args.domain, args.feature), 0
         elif args.command == "promote":

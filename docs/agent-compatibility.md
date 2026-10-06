@@ -15,3 +15,12 @@ DocCanon follows the directory-based Agent Skills format: a `SKILL.md` entrypoin
 `python3 install.py --agent universal --scope project` is the lowest-duplication default for hosts that recognize `.agents/skills`. Use host-specific targets only when the host requires or prefers its own directory.
 
 Run `python3 install.py --dry-run ...` to inspect paths before writing. Start or refresh the agent session after installing so discovery runs again.
+
+## Generated entry files
+
+Hosts load a repository-root instruction file at session start. DocCanon generates that file from the canonical library instead of leaving it hand-maintained:
+
+- `AGENTS.md` is the shared entry for hosts that read the AGENTS.md standard, including Codex, Cursor, GitHub Copilot, and OpenCode.
+- The Claude adapter is a thin `CLAUDE.md` that imports the shared entry with `@AGENTS.md`. Configure adapters with `agent_adapters` in `.doccanon.yml`; set `agent_entry: ""` to opt out of generation.
+- The entry is refreshed only when canonical content changes. Its user-owned custom section is preserved verbatim and never treated as current truth.
+- `check` and `preflight` are read-only and fail when the projection is missing or stale.

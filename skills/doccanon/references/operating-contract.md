@@ -23,11 +23,12 @@ Never call enabled, indexed, clean, or mapped documentation synchronized unless 
 ## Project-local information architecture
 
 - Store durable knowledge in the owning repository: `CONTEXT.md` and `docs/`.
-- Let `CONTEXT.md` own confirmed terminology and domain boundaries.
+- Let `CONTEXT.md` own confirmed terminology and domain boundaries, kept current-only; retired terms are removed or replaced, never accumulated as history.
 - Separate product, interaction, architecture, per-feature, decision, operations, development, and release responsibilities.
 - Give each shipped cohesive capability its own feature contract. A registry or category README is navigation, not feature documentation.
 - Keep one canonical owner per fact. Link between canonical owners instead of duplicating truth.
 - Keep development and release logs as historical snapshots, never current-state authority.
+- Treat the repository-root agent entry (`AGENTS.md`) and its adapters as generated projections of the canonical library, not canonical owners.
 
 ## Admission
 
@@ -79,10 +80,19 @@ Canonical current-state documents must be useful change contracts, not inventori
 - Refuse completion when an owner is stale, an implementation file is unaccounted for, a domain is unreviewed, verification is absent, or freshness checks fail.
 - Persist the resulting impact receipt in the automatic development record so later maintainers can audit why documents changed or did not change.
 
+## Agent entry projection
+
+- The repository-root agent entry (`AGENTS.md`, plus configured adapters such as `CLAUDE.md`) is a generated view over canonical owners. It owns no facts.
+- Render it from current-state, human-confirmed, append-only, and generated owners only. Retired, historical, draft, and unclassified material never enters it by construction.
+- Keep the declared user-owned custom section verbatim. Never absorb it as canonical truth; move durable knowledge into owning canonical documents.
+- Write only when the projection actually changed; unchanged canonical content must produce no write, no diff, and no churn.
+- `check`, `preflight`, and Git hooks are read-only and must fail on a missing or stale projection. Refresh happens in the Agent task loop at the completion boundary, never in a commit hook.
+- Pre-existing hand-written agent instruction files are migration sources, not a parallel documentation system.
+
 ## Optional Grill with Docs relationship
 
 DocCanon is self-contained. `grill-with-docs` may clarify terminology or decisions, but DocCanon must work without it. Depend on its outputs when available; never copy, fork, or modify that skill.
 
 ## Non-goals
 
-DocCanon is not a Git branch manager, a transcript store, a replacement for runtime verification, an excuse to document every component, or an authority for inferred product intent. It does not force governance on trivial projects and does not preserve obsolete prose as current truth.
+DocCanon is not a Git branch manager, a transcript store, a replacement for runtime verification, an excuse to document every component, or an authority for inferred product intent. It does not force governance on trivial projects and does not preserve obsolete prose as current truth. It does not preserve a hand-maintained agent instruction dump as truth.
