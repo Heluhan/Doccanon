@@ -201,6 +201,10 @@ DocCanon treats the agent entry as a **generated projection** instead:
 
 **The entry file is a view, not a second source of truth.**
 
+### Retired material leaves the searchable tree
+
+Retiring a document is one operation: DocCanon moves it into the archive root, stamps it as `historical` or `superseded` with a short notice naming its owner or reason, and records the archive pattern in `.ignore` so routine text search skips it. Archaeology is still possible by explicit path or with ignore and hidden-file flags. `migrate scan` skips the archive, so retired material never comes back as a migration candidate.
+
 ### Future work has a governed home
 
 Roadmaps, launch conditions, and known gaps live in `docs/plans/` with `doccanon_authority: plan`. Plans route to agents when relevant, never pretend to be shipped behavior, and a release cannot complete while a plan targeting that version is still unresolved (`active` or `abandoned`). When a goal ships, its outcome moves into release history and the plan retires.

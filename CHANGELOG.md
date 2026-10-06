@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0
+
+- Added retirement relocation: `retire` moves obsolete documents into a configurable archive root (default `.doccanon/archive/`), stamps a non-active authority with a retirement notice, and records search exclusion.
+- Added `.ignore` management and an `archive-not-search-excluded` check warning, so ripgrep-based agents skip retired material by default while archaeology remains possible.
+- `migrate scan` now skips the archive root, and generated agent entries document the archive policy.
+- Added pointer stubs for high-traffic legacy entry points and protections against retiring active canonical documents.
+- Added tests for relocation, stamping, search exclusion, pointers, and warnings (40 passing).
+
 ## 0.10.0
 
 - Added a governed plans layer (`docs/plans/`) with the `plan` authority for milestones, launch readiness, and open gaps: routable in context, never current truth.

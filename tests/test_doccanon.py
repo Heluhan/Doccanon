@@ -412,6 +412,91 @@ class DocCanonCLITest(unittest.TestCase):
             completed["release_readiness"],
         )
 
+    def test_retire_relocates_stamps_and_excludes_from_search(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        notes = root / "notes"
+        notes.mkdir()
+        (notes / "legacy.md").write_text("# Legacy notes\n\nOld architecture plan from 2024.\n", encoding="utf-8")
+        retired = json.loads(
+            self.cli(
+                root,
+                "retire",
+                "notes/legacy.md",
+                "--reason",
+                "Superseded by the documented architecture owner.",
+                "--owner",
+                "docs/architecture.md",
+                "--json",
+            ).stdout
+        )
+        self.assertEqual("retired", retired["status"])
+        self.assertEqual(".doccanon/archive/notes/legacy.md", retired["archived_to"])
+        self.assertFalse((root / "notes" / "legacy.md").exists())
+        archived = (root / ".doccanon" / "archive" / "notes" / "legacy.md").read_text(encoding="utf-8")
+        self.assertIn("doccanon_authority: historical", archived)
+        self.assertIn("Retired by DocCanon", archived)
+        self.assertIn("docs/architecture.md", archived)
+        ignore = (root / ".ignore").read_text(encoding="utf-8")
+        self.assertIn(".doccanon/archive/", ignore)
+        self.assertTrue(retired["search_ignore"]["updated"])
+
+        scanned = json.loads(self.cli(root, "inventory", "--json").stdout)
+        self.assertNotIn(
+            ".doccanon/archive/notes/legacy.md",
+            {item["path"] for item in scanned["candidates"]},
+        )
+
+    def test_retire_pointer_and_active_authority_protection(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        legacy = root / "OLD_GUIDE.md"
+        legacy.write_text("# Old guide\n\nHistoric guidance.\n", encoding="utf-8")
+        pointer = json.loads(
+            self.cli(
+                root,
+                "retire",
+                "OLD_GUIDE.md",
+                "--owner",
+                "CONTEXT.md",
+                "--pointer",
+                "--json",
+            ).stdout
+        )
+        self.assertEqual("OLD_GUIDE.md", pointer["pointer"])
+        stub = legacy.read_text(encoding="utf-8")
+        self.assertIn(".doccanon/archive/OLD_GUIDE.md", stub)
+        self.assertIn("not current truth", stub)
+        self.assertTrue((root / ".doccanon" / "archive" / "OLD_GUIDE.md").exists())
+
+        refused = self.cli(root, "retire", "CONTEXT.md", "--json", check=False)
+        self.assertEqual(2, refused.returncode)
+        self.assertEqual("error", json.loads(refused.stdout)["status"])
+
+        active = root / "notes"
+        active.mkdir()
+        (active / "active.md").write_text(
+            "---\ndoccanon_authority: human-confirmed\n---\n\n# Active notes\n", encoding="utf-8"
+        )
+        refused_active = self.cli(root, "retire", "notes/active.md", "--json", check=False)
+        self.assertEqual(2, refused_active.returncode)
+        self.assertIn("active authority", json.loads(refused_active.stdout)["error"])
+
+    def test_archive_without_search_ignore_warns(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        archived = root / ".doccanon" / "archive"
+        archived.mkdir(parents=True)
+        (archived / "old.md").write_text("old\n", encoding="utf-8")
+        checked = json.loads(self.cli(root, "check", "--json", check=False).stdout)
+        self.assertIn("archive-not-search-excluded", {item["code"] for item in checked["findings"]})
+        (root / ".ignore").write_text(".doccanon/archive/\n", encoding="utf-8")
+        checked_again = json.loads(self.cli(root, "check", "--json", check=False).stdout)
+        self.assertNotIn("archive-not-search-excluded", {item["code"] for item in checked_again["findings"]})
+
     def test_context_prefers_governed_docs_and_excludes_history(self) -> None:
         temp, root = self.make_repo()
         self.addCleanup(temp.cleanup)

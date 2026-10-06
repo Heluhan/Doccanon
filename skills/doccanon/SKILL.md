@@ -3,7 +3,7 @@ name: doccanon
 description: Keep coding agents from trusting stale project documentation by maintaining branch-aware, evidence-backed current-state contracts aligned with code and releases. Use for substantive repository work, brownfield knowledge migration, feature implementation, documentation freshness checks, commits, pull requests, and releases. Skip general Q&A, isolated snippets, and disposable prototypes.
 license: MIT
 metadata:
-  version: "0.10.0"
+  version: "0.11.0"
 ---
 
 # DocCanon
@@ -98,6 +98,8 @@ When the user asks to migrate or consolidate existing documentation:
 8. Write and verify canonical current-state knowledge in `CONTEXT.md` and `docs/`. A migration that only creates an index or replacement links is still bootstrapping.
 9. Build `docs/features/manifest.json`. Give every current feature its own `docs/features/<feature>.md`; use code and tests to reconstruct current behavior when old documents are absent or unreliable.
 10. Run `migrate status`, `features status`, `check`, and link validation. Test realistic tasks using canonical context only. Ensure rerunning migration creates no duplicate entries, moves, or documents.
+
+Retire every absorbed, superseded, or ignored source with the helper's `retire` operation: it relocates the file into the archive root, stamps a non-active authority with a retirement notice, and excludes the archive from default text search. Leave an in-place pointer only for high-traffic legacy entry points.
 
 ## Trust gate
 

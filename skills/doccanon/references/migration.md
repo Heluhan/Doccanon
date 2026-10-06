@@ -115,7 +115,7 @@ Before promotion:
 2. Resolve duplicates and conflicts against current code and human-confirmed decisions.
 3. Rewrite accepted claims into the owning canonical contracts using the project's terminology. Do not paste incompatible legacy vocabulary verbatim. Rewrite `CONTEXT.md` current-only: absorbed terminology replaces legacy definitions, and retired vocabulary becomes at most a one-line replacement mapping.
 4. Record claim-level integration receipts in the manifest.
-5. Freeze absorbed legacy documents in the manifest. Add a short replacement notice only to misleading high-traffic legacy entry points; do not rewrite every old source and do not add a repository-specific freeze script.
+5. Freeze absorbed legacy documents in the manifest and retire them with the helper: relocation into the archive root, a non-active authority stamp, a short retirement notice, and default search exclusion. Leave an in-place pointer only for misleading high-traffic legacy entry points; do not rewrite source content and do not add a repository-specific freeze script.
 6. Test a realistic task using only `context --intent` and canonical documents. If the task still requires a legacy source to understand normal current behavior, migration is incomplete.
 7. Treat pre-existing repository-root agent instruction files (`AGENTS.md`, `CLAUDE.md`, and host-specific memory rules) as migration sources. Absorb still-useful rules into canonical owners; the generated projection preserves the remainder in its user-owned custom section and never treats it as current truth.
 

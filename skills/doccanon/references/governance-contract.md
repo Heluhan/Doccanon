@@ -57,6 +57,7 @@ Plans are optional. A project promotes without a current-state owner for `plans/
 - `plan`: intended future work; routable, but never current truth. Update it as work progresses and retire it when the goal ships or is abandoned.
 - `generated`: regenerate from its declared source.
 - `snapshot`: time-bounded reference; never treat as current without verification.
+- `historical`: retired provenance; never current truth. Retired material is archived outside the live docs tree and excluded from both default context and default text search.
 
 `human-confirmed` may be assigned only after the user explicitly confirms the content. Agent authorship, file age, and Git history do not establish human confirmation.
 

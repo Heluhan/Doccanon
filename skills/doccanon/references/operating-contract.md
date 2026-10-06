@@ -53,8 +53,16 @@ Canonical current-state documents must be useful change contracts, not inventori
 - Rewrite only verified, still-useful, missing knowledge into the canonical library using the project's current language.
 - Reject stale implementation claims against current implementation evidence. Preserve unresolved intent or rationale for human review.
 - Record claim-level receipts only for absorbed knowledge; give every other source an evidence-backed terminal disposition.
-- Freeze legacy sources through manifest disposition and default context exclusion. Do not maintain a parallel legacy library, mass-edit every old source, or invent a project-specific freeze system.
+- Retire legacy sources through manifest disposition, relocation into the single archive root, and default exclusion from context and text search. Do not maintain a parallel legacy documentation tree, rewrite old content beyond the retirement notice, or invent a project-specific freeze system.
 - After migration, normal work must be possible from canonical docs alone; use legacy sources only for archaeology.
+
+## Retirement
+
+- Move obsolete material into the configured archive root; never leave retired content mixed into the live documentation tree.
+- Stamp archived material with a non-active authority and a short retirement notice naming its disposition or canonical owner. Do not rewrite its content.
+- Ensure default text search excludes the archive root; archaeology requires explicit opt-in. Keep the archive tracked so provenance survives.
+- Keep unresolved material in place until it receives an evidence-backed disposition. Retire accepted, superseded, or ignored sources only.
+- A retired document never substitutes for a canonical owner and is never counted as current-state coverage.
 
 ## Branches and history
 

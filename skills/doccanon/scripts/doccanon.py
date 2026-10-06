@@ -30,6 +30,13 @@ DEFAULT_CUSTOM_HINT = (
     "<!-- Add project- or tool-specific notes here. DocCanon preserves this section "
     "verbatim and does not verify it. Keep durable project knowledge in CONTEXT.md and docs/. -->"
 )
+DEFAULT_ARCHIVE_ROOT = ".doccanon/archive"
+RETIRE_DISPOSITIONS = {
+    "historical": "historical",
+    "superseded": "superseded",
+    "archived": "historical",
+    "ignored": "historical",
+}
 ENTRY_CATEGORY_LABELS = {
     "product": "Product",
     "interaction": "Interaction",
@@ -195,6 +202,7 @@ def dump_config(data: dict[str, Any]) -> str:
         "required_domains",
         "migration_manifest",
         "feature_manifest",
+        "archive_root",
         "agent_entry",
         "agent_adapters",
         "branch_policy",
@@ -237,6 +245,7 @@ def load_config(root: Path) -> dict[str, Any] | None:
         if data["maturity"] not in MATURITIES:
             raise DocCanonError(f"Invalid maturity in {CONFIG_NAME}")
         data.setdefault("required_domains", [])
+        data.setdefault("archive_root", DEFAULT_ARCHIVE_ROOT)
         data.setdefault("agent_entry", DEFAULT_AGENT_ENTRY)
         data.setdefault("agent_adapters", list(DEFAULT_AGENT_ADAPTERS))
         data.setdefault("branch_policy", "aware")
@@ -300,12 +309,13 @@ def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = F
     if branch["dirty"] and not allow_dirty:
         raise DocCanonError("Refusing initialization in a dirty worktree; isolate or finish existing work, or pass --allow-dirty explicitly")
     config = {
-        "schema_version": 4,
+        "schema_version": 5,
         "status": "enabled",
         "maturity": "bootstrapping",
         "docs_root": "docs",
         "context_file": "CONTEXT.md",
         "required_domains": [],
+        "archive_root": DEFAULT_ARCHIVE_ROOT,
         "agent_entry": DEFAULT_AGENT_ENTRY,
         "agent_adapters": list(DEFAULT_AGENT_ADAPTERS),
         "branch_policy": "aware",
@@ -555,6 +565,12 @@ def agent_entry_targets(config: dict[str, Any]) -> list[tuple[str, str]]:
     return targets
 
 
+def doccanon_artifact_paths(config: dict[str, Any]) -> set[str]:
+    paths = {relative for relative, _ in agent_entry_targets(config)}
+    paths.update({".ignore", ".rgignore"})
+    return paths
+
+
 def entry_routing_rows(root: Path, config: dict[str, Any]) -> list[tuple[str, str]]:
     docs_root = str(config.get("docs_root", "docs")).strip("/")
     prefix = docs_root + "/"
@@ -627,6 +643,12 @@ def entry_projection(root: Path, config: dict[str, Any], kind: str) -> str:
         "  never as current behavior.",
         f"- `{docs_root}/development/` and `{docs_root}/releases/` are historical snapshots.",
     ]
+    archive_rel = archive_root_relative(config)
+    if archive_rel:
+        lines.append(
+            f"- Retired material is archived under `{archive_rel}/` and excluded from default search. "
+            "Consult it only for archaeology."
+        )
     manifest = config.get("migration_manifest")
     if manifest:
         lines.append(f"- Frozen legacy sources and their evidence: `{manifest}`.")
@@ -719,6 +741,146 @@ def render_command(root: Path, check: bool) -> tuple[dict[str, Any], int]:
     result["project"] = str(root)
     result["check"] = check
     return result, 1 if result["status"] == "drift" else 0
+
+
+def archive_root_relative(config: dict[str, Any]) -> str:
+    value = str(config.get("archive_root", DEFAULT_ARCHIVE_ROOT)).strip()
+    if not value:
+        return ""
+    return normalize_relative_path(value, "archive_root").rstrip("/")
+
+
+def search_ignore_covers(root: Path, archive_rel: str) -> bool:
+    if not archive_rel:
+        return True
+    patterns = {
+        archive_rel,
+        archive_rel + "/",
+        "/" + archive_rel,
+        "/" + archive_rel + "/",
+    }
+    for name in (".ignore", ".rgignore", ".gitignore"):
+        path = root / name
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and stripped in patterns:
+                return True
+    return False
+
+
+def ensure_search_ignore(root: Path, config: dict[str, Any]) -> dict[str, Any]:
+    archive_rel = archive_root_relative(config)
+    if not archive_rel:
+        return {"updated": False, "file": None, "pattern": None}
+    pattern = archive_rel + "/"
+    if search_ignore_covers(root, archive_rel):
+        return {"updated": False, "file": ".ignore", "pattern": pattern}
+    path = root / ".ignore"
+    existing = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    path.write_text(existing + separator + pattern + "\n", encoding="utf-8")
+    return {"updated": True, "file": ".ignore", "pattern": pattern}
+
+
+def with_retired_notice(text: str, notice: str) -> str:
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end >= 0:
+            return text[: end + 5] + "\n" + notice + "\n\n" + text[end + 5 :].lstrip("\n")
+    return notice + "\n\n" + text
+
+
+def retire_document(
+    root: Path,
+    document: str,
+    reason: str,
+    owner: str | None,
+    disposition: str,
+    pointer: bool,
+) -> dict[str, Any]:
+    config = load_config(root)
+    if config is None or config["status"] != "enabled":
+        raise DocCanonError("retire requires an enabled DocCanon project")
+    archive_rel = archive_root_relative(config)
+    if not archive_rel:
+        raise DocCanonError("archive_root is disabled in .doccanon.yml")
+    stamp = RETIRE_DISPOSITIONS.get(disposition)
+    if stamp is None:
+        raise DocCanonError("disposition must be historical, superseded, archived, or ignored")
+    source = (root / document).resolve()
+    try:
+        source.relative_to(root)
+    except ValueError as exc:
+        raise DocCanonError("Document must stay inside the project") from exc
+    if not source.is_file():
+        raise DocCanonError(f"Document not found: {document}")
+    relative = source.relative_to(root).as_posix()
+    if relative == archive_rel or relative.startswith(archive_rel + "/"):
+        raise DocCanonError("Document is already in the archive")
+    protected = {CONFIG_NAME, str(config.get("context_file", "CONTEXT.md"))}
+    protected.update(target for target, _ in agent_entry_targets(config))
+    if relative in protected:
+        raise DocCanonError(f"{relative} is managed by DocCanon and cannot be retired")
+    text = source.read_text(encoding="utf-8", errors="replace")
+    authority = str(frontmatter(text).get("doccanon_authority", "unclassified"))
+    if authority in CONTEXT_AUTHORITIES:
+        raise DocCanonError(
+            f"{relative} still has active authority {authority!r}; update or remove its canonical ownership first"
+        )
+    target = root / archive_rel / relative
+    if target.exists():
+        raise DocCanonError(f"Archive target already exists: {target.relative_to(root).as_posix()}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    values: dict[str, Any] = {"doccanon_authority": stamp, "doccanon_retired_from": relative}
+    if owner:
+        values["doccanon_owner"] = owner.strip()
+    update_frontmatter(target, values)
+    notice_lines = [
+        "> **Retired by DocCanon.** This document is provenance, not current truth.",
+        f"> Archived from `{relative}` on {now_iso()[:10]}.",
+    ]
+    if owner:
+        notice_lines.append(f"> Canonical owner: `{owner.strip()}`.")
+    if reason:
+        notice_lines.append(f"> Reason: {reason.strip()}")
+    target.write_text(
+        with_retired_notice(target.read_text(encoding="utf-8"), "\n".join(notice_lines)),
+        encoding="utf-8",
+    )
+    archived_to = target.relative_to(root).as_posix()
+    pointer_path = None
+    if pointer:
+        stub = ["# Moved"]
+        if owner:
+            stub.append(f"Canonical owner: `{owner.strip()}`")
+        stub.extend(
+            [
+                "",
+                f"> This document moved to the DocCanon archive: `{archived_to}`.",
+                "> It is provenance, not current truth.",
+            ]
+        )
+        source.write_text("\n".join(stub) + "\n", encoding="utf-8")
+        stub_values: dict[str, Any] = {"doccanon_authority": stamp, "doccanon_archived_to": archived_to}
+        if owner:
+            stub_values["doccanon_owner"] = owner.strip()
+        update_frontmatter(source, stub_values)
+        pointer_path = relative
+    else:
+        source.unlink()
+    return {
+        "status": "retired",
+        "document": relative,
+        "archived_to": archived_to,
+        "authority": stamp,
+        "disposition": disposition,
+        "pointer": pointer_path,
+        "owner": owner.strip() if owner else None,
+        "search_ignore": ensure_search_ignore(root, config),
+    }
 
 
 def revision_exists(root: Path, revision: str) -> bool:
@@ -1103,9 +1265,8 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
             findings.append(Finding("error", "missing-canonical-file", f"Missing {path.relative_to(root)}"))
 
     current_changes = changed_files(root, base=base, staged=staged)
-    entry_targets = agent_entry_targets(config)
-    entry_paths = {relative for relative, _ in entry_targets}
-    current_changes = {item for item in current_changes if item not in entry_paths}
+    artifact_paths = doccanon_artifact_paths(config)
+    current_changes = {item for item in current_changes if item not in artifact_paths}
     projection = render_agent_entries(root, config, write=False)
     for item in projection["files"]:
         if not item["changed"]:
@@ -1174,6 +1335,16 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
                     record.relative,
                 )
             )
+    archive_rel = archive_root_relative(config)
+    if archive_rel and (root / archive_rel).is_dir() and not search_ignore_covers(root, archive_rel):
+        findings.append(
+            Finding(
+                "warning",
+                "archive-not-search-excluded",
+                "Archive root exists but no search ignore file excludes it; run retire or add it to .ignore",
+                archive_rel + "/",
+            )
+        )
     current_state = [record for record in records if record.authority == "current-state"]
     covered_domains = sorted({domain for record in current_state for domain in record.domains})
     required_domains = sorted({str(item) for item in config.get("required_domains", [])})
@@ -1214,13 +1385,13 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
         relevant = {
             item
             for item in current_changes
-            if item not in doc_paths and item not in entry_paths and match_any(item, record.covers)
+            if item not in doc_paths and item not in artifact_paths and match_any(item, record.covers)
         }
         if not staged and not base:
             relevant.update(
                 item
                 for item in diff_since(root, anchor)
-                if item not in doc_paths and item not in entry_paths and match_any(item, record.covers)
+                if item not in doc_paths and item not in artifact_paths and match_any(item, record.covers)
             )
 
         if relevant and rel not in current_changes:
@@ -1362,9 +1533,13 @@ def inventory(root: Path, limit: int) -> dict[str, Any]:
     excluded = {CONFIG_NAME, DEFAULT_MIGRATION_MANIFEST}
     if config and config.get("migration_manifest"):
         excluded.add(str(config["migration_manifest"]))
+    archive_rel = archive_root_relative(config) if config else ""
+    archive_prefix = archive_rel + "/" if archive_rel else None
     for path in tracked_and_untracked_files(root):
         relative = path.relative_to(root).as_posix()
         if relative in excluded:
+            continue
+        if archive_prefix and (relative == archive_rel or relative.startswith(archive_prefix)):
             continue
         rel_parts = path.relative_to(root).parts
         if any(part in EXCLUDED_PARTS for part in rel_parts):
@@ -1663,7 +1838,7 @@ def promote(
             )
     config.update(
         {
-            "schema_version": 4,
+            "schema_version": 5,
             "maturity": "governed",
             "required_domains": required_domains,
             "migration_manifest": manifest,
@@ -1696,8 +1871,8 @@ def preflight(root: Path, target: str | None) -> tuple[dict[str, Any], int]:
         raise DocCanonError(f"Cannot resolve preflight target: {base_ref}")
     checked, _ = check_project(root, base=base_ref, staged=False)
     changed = changed_files(root, base=base_ref, staged=False)
-    entry_paths = {relative for relative, _ in agent_entry_targets(config)}
-    changed = {item for item in changed if item not in entry_paths}
+    artifact_paths = doccanon_artifact_paths(config)
+    changed = {item for item in changed if item not in artifact_paths}
     affected: list[dict[str, Any]] = []
     stale_features: list[str] = []
     feature_manifest = str(config.get("feature_manifest", DEFAULT_FEATURE_MANIFEST))
@@ -1767,13 +1942,13 @@ def documentation_impact(root: Path, target: str | None) -> dict[str, Any]:
     changed = changed_files(root, base=base_ref, staged=False)
     docs_root = str(config.get("docs_root", "docs")).rstrip("/") + "/"
     context_file = str(config.get("context_file", "CONTEXT.md"))
-    entry_paths = {relative for relative, _ in agent_entry_targets(config)}
+    artifact_paths = doccanon_artifact_paths(config)
     implementation_files = sorted(
         path
         for path in changed
         if path != CONFIG_NAME
         and path != context_file
-        and path not in entry_paths
+        and path not in artifact_paths
         and not path.startswith(docs_root)
     )
 
@@ -2266,6 +2441,14 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--check", action="store_true")
     item.add_argument("--json", action="store_true")
 
+    item = sub.add_parser("retire")
+    item.add_argument("document")
+    item.add_argument("--reason", default="")
+    item.add_argument("--owner")
+    item.add_argument("--disposition", default="historical")
+    item.add_argument("--pointer", action="store_true")
+    item.add_argument("--json", action="store_true")
+
     item = sub.add_parser("mark-verified")
     item.add_argument("document")
     item.add_argument("--covers", action="append")
@@ -2377,6 +2560,16 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 0 if result["status"] == "synchronized" else 1
         elif args.command == "render":
             result, exit_code = render_command(root, args.check)
+        elif args.command == "retire":
+            result = retire_document(
+                root,
+                args.document,
+                args.reason,
+                args.owner,
+                args.disposition,
+                args.pointer,
+            )
+            exit_code = 0
         elif args.command == "mark-verified":
             result, exit_code = mark_verified(root, args.document, args.covers, args.domain, args.feature), 0
         elif args.command == "promote":

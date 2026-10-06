@@ -24,3 +24,7 @@ Hosts load a repository-root instruction file at session start. DocCanon generat
 - The Claude adapter is a thin `CLAUDE.md` that imports the shared entry with `@AGENTS.md`. Configure adapters with `agent_adapters` in `.doccanon.yml`; set `agent_entry: ""` to opt out of generation.
 - The entry is refreshed only when canonical content changes. Its user-owned custom section is preserved verbatim and never treated as current truth.
 - `check` and `preflight` are read-only and fail when the projection is missing or stale.
+
+## Search exclusion for retired material
+
+Retirement relocates obsolete documents into the configured archive root and records the pattern in `.ignore`. Ripgrep-based hosts (including Codex, Claude Code, and OpenCode search) skip that tree by default, and a hidden archive directory is skipped by default ripgrep behavior even without the pattern. Hosts with their own ignore conventions may need an additional mapping; keep the archive out of any host-specific index when the host documents one.
