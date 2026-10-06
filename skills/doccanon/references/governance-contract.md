@@ -8,6 +8,7 @@ Keep durable knowledge in the project that owns it:
 CONTEXT.md
 docs/
   README.md
+  registry.json
   product/
   interaction/
   architecture/
@@ -19,7 +20,7 @@ docs/
   releases/
 ```
 
-Create category files lazily. `docs/README.md` is the map, not a second copy of every fact.
+Create category files lazily. `docs/README.md` is the map, not a second copy of every fact. `docs/registry.json` is the generated, machine-readable enumeration of routable owners; `check` fails when the tree and the registry disagree, and it is never edited by hand.
 
 ## Maturity
 
@@ -45,7 +46,7 @@ When `features` applies, domain coverage requires a complete `docs/features/mani
 | `development/` | Time-bounded development milestones and verification | Current product truth |
 | `releases/` | Versioned shipped-change snapshots and known limitations | Future plans or branch-local claims |
 
-One fact has one canonical owner. Other canonical documents link to it. Migrated legacy sources are frozen provenance and are not maintained in parallel. Freezing is a DocCanon behavior: manifest disposition, relocation into the archive root, and default exclusion from context and text search. Do not add a custom enforcement system to each project. The repository-root agent entry (`AGENTS.md`) and its adapters are generated projections of these owners; they are not canonical locations and must not become a hand-maintained second source of truth.
+One fact has one canonical owner. Other canonical documents link to it. Migrated legacy sources are frozen provenance and are not maintained in parallel. Freezing is a DocCanon behavior: manifest disposition, relocation into the archive root, and default exclusion from context and text search. Do not add a custom enforcement system to each project. The repository-root agent entry (`AGENTS.md`), its adapters, and the owner registry (`docs/registry.json`) are generated projections of these owners; they are not canonical locations and must not become a hand-maintained second source of truth.
 
 Plans are optional. A project promotes without a current-state owner for `plans/`; plans declare `doccanon_authority: plan` with a `doccanon_status` and an optional `doccanon_target`, and they never substitute for current-state behavior. When a goal ships or is abandoned, retire its plan and record the outcome in development or release history.
 

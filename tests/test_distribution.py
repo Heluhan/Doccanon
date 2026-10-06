@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.py"
 DEMO = ROOT / "scripts" / "demo.py"
+CHECKER = ROOT / "scripts" / "check_version_policy.py"
 HELPER = ROOT / "skills" / "doccanon" / "scripts" / "doccanon.py"
 MEASURE = ROOT / "skills" / "doccanon" / "scripts" / "measure_context.py"
 
@@ -91,6 +92,30 @@ class DistributionTest(unittest.TestCase):
         match = re.search(r'(?m)^\s+version:\s*"?([^"\n]+?)"?\s*$', skill)
         self.assertIsNotNone(match)
         self.assertEqual(plugin["version"], match.group(1).strip())
+
+    def test_version_policy_rejects_branch_local_bumps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            run("git", "init", "-q", str(project))
+            run("git", "-C", str(project), "config", "user.email", "test@example.com")
+            run("git", "-C", str(project), "config", "user.name", "DocCanon Test")
+            (project / ".codex-plugin").mkdir()
+            (project / ".codex-plugin" / "plugin.json").write_text('{"version": "0.1.0"}\n', encoding="utf-8")
+            run("git", "-C", str(project), "add", ".")
+            run("git", "-C", str(project), "commit", "-qm", "initial")
+            run("git", "-C", str(project), "branch", "-M", "main")
+            run("git", "-C", str(project), "checkout", "-qb", "feat/bump")
+            (project / ".codex-plugin" / "plugin.json").write_text('{"version": "0.2.0"}\n', encoding="utf-8")
+            run("git", "-C", str(project), "add", ".")
+            run("git", "-C", str(project), "commit", "-qm", "bump on a branch")
+
+            refused = run("python3", str(CHECKER), "main", "--project", str(project), check=False)
+            self.assertEqual(1, refused.returncode)
+            self.assertIn("version policy", refused.stderr)
+
+            run("git", "-C", str(project), "checkout", "-q", "main")
+            allowed = run("python3", str(CHECKER), "main", "--project", str(project))
+            self.assertEqual(0, allowed.returncode)
 
     def test_installer_skips_local_python_caches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -37,7 +37,8 @@ Never resolve a semantic step by disabling a check, deleting history, or editing
 - 0.10 introduced the plan authority; roadmaps or proposals stored elsewhere need classification.
 - 0.11 made retirement a relocation with default search exclusion; earlier migrations froze sources in place.
 - 0.12 removed retired configuration fields and stopped treating repository-meta files as implementation.
-- 0.13 added authority validation, mixed-language tokenization, and this upgrade mechanism.
+- 0.13 added authority validation, mixed-language tokenization, and the upgrade mechanism.
+- 0.14 added the generated owner registry, the retired-feature contract guard, the archive index, idempotent `enable`, and the trunk-only version policy.
 
 ## Structural legacy
 
@@ -47,6 +48,8 @@ Never resolve a semantic step by disabling a check, deleting history, or editing
 | In-place frozen sources (pre-0.11) | non-integrated migration sources still in the tree | Review each source: `retire` it into the archive, absorb it into a canonical owner, or keep it as a canonical document. Give `ignored` sources the closest review; they may be active knowledge that migration only set aside. |
 | Hand-written adapter for an unconfigured host | known adapter file exists without the generated marker | Add the adapter to `agent_adapters` and reconcile, or remove the file. |
 | Retired configuration fields | `config-cleanup` step | `upgrade apply`. |
+| Missing owner registry (pre-0.14) | `registry-index` mechanical step; `unregistered-owner` errors once configured | `upgrade apply` builds it and records the `registry` key; afterwards `registry build` or `sync complete` keeps it current. |
+| Retired feature still keeping an active contract | `retired-feature-contract` mechanical step; `features status` finding | `upgrade apply` archives leftovers; during normal work, archive the contract or restore the feature to current. |
 
 ## Semantic legacy
 

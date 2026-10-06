@@ -3,7 +3,7 @@ name: doccanon
 description: Keep coding agents from trusting stale project documentation by maintaining branch-aware, evidence-backed current-state contracts aligned with code and releases. Use for substantive repository work, brownfield knowledge migration, feature implementation, documentation freshness checks, commits, pull requests, and releases. Skip general Q&A, isolated snippets, and disposable prototypes.
 license: MIT
 metadata:
-  version: "0.13.1"
+  version: "0.14.0"
 ---
 
 # DocCanon
@@ -46,7 +46,7 @@ For every substantive task in an enabled project:
 5. Implement and verify the code change.
 6. Run `sync plan --json`. Review every affected feature, current-state owner, unmapped implementation file, and governed domain. Do not let an unmapped file silently pass. Create or update the owning feature and cross-cutting documents, or record a concrete file-level or domain-level exclusion receipt.
 7. Rerun the plan until every implementation change is mapped or explicitly excluded. For a new cohesive user or operator capability, create its feature contract and manifest mapping even when no prior document predicted it.
-8. Run `sync complete` with the actual verification and semantic review decisions. Let it enforce owner updates, domain coverage, unmapped-file receipts, freshness, automatic development or release history, and the generated agent entry projection. Do not ask the user to run DocCanon commands.
+8. Run `sync complete` with the actual verification and semantic review decisions. Let it enforce owner updates, domain coverage, unmapped-file receipts, freshness, automatic development or release history, and the generated agent entry and owner-registry projections. Do not ask the user to run DocCanon commands.
 9. Before a PR or merge, run `preflight --target <integration-branch>`. Report stale or unresolved documents honestly. Claim synchronized only when `sync complete` and `check` pass.
 
 [references/synchronization.md](references/synchronization.md) owns the impact plan, domain review, completion gate, and read-only boundaries. `grill-with-docs` is an optional companion, not a dependency. When available, hand complex terminology or decision clarification to it. Consume the resulting `CONTEXT.md` or ADR changes afterward. Never copy, fork, or modify that skill.
@@ -131,6 +131,8 @@ The helper detects covered code changes that are not accompanied by a document u
 ## Agent entry projection
 
 The repository-root agent entry (`AGENTS.md`, plus configured adapters such as `CLAUDE.md`) is a generated view over the canonical library, not a canonical owner. Render it from current-state owners only; retired, historical, draft, and unclassified material never enters it by construction. Rendering is idempotent, preserves the user-owned custom section verbatim, and writes only when content changed. `check` and `preflight` are read-only and fail on a missing or stale projection; `sync complete` refreshes it. Pre-existing hand-written entry files are migration sources. Read [references/operating-contract.md](references/operating-contract.md) for the full projection rules.
+
+The owner registry (`docs/registry.json`) is the same kind of generated projection: it enumerates every routable owner with its authority, domains, coverage, and anchor. `check` fails when the tree and the registry disagree, `sync complete`, `promote`, and `upgrade` refresh it, and it is never hand-edited.
 
 ## Plans and release readiness
 

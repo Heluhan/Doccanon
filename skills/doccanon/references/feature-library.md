@@ -74,4 +74,4 @@ Allowed resolved statuses are `current`, `excluded`, and `retired`. Candidate or
 
 ## Maintenance
 
-For every semantic code change, identify the owning feature before implementation. Update its contract in the same change. Add a manifest entry and new contract when shipping a new independently meaningful capability. Retire rather than erase removed features when the history still explains durable decisions or migrations.
+For every semantic code change, identify the owning feature before implementation. Update its contract in the same change. Add a manifest entry and new contract when shipping a new independently meaningful capability. Retire rather than erase removed features when the history still explains durable decisions or migrations. A retired feature must not keep an active contract: the helper fails `features status` until the contract is archived, and the upgrade pass archives leftovers.

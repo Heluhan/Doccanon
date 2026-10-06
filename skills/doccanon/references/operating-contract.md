@@ -30,6 +30,7 @@ Never call enabled, indexed, clean, or mapped documentation synchronized unless 
 - Keep development and release logs as historical snapshots, never current-state authority.
 - Keep intended future work in `plans/`: routable when relevant, but never current truth.
 - Treat the repository-root agent entry (`AGENTS.md`) and its adapters as generated projections of the canonical library, not canonical owners.
+- Keep the generated owner registry (`docs/registry.json`) as the machine-readable enumeration of routable owners; `check` fails on any disagreement and `sync complete` refreshes it.
 
 ## Admission
 
@@ -95,6 +96,7 @@ Canonical current-state documents must be useful change contracts, not inventori
 - Discover new features from the implemented capability, not only from the existing manifest. Create a feature contract and code mapping when a change introduces a cohesive user or operator capability.
 - Refuse completion when an owner is stale, an implementation file is unaccounted for, a domain is unreviewed, verification is absent, or freshness checks fail.
 - Persist the resulting impact receipt in the automatic development record so later maintainers can audit why documents changed or did not change.
+- Refresh every generated projection (the agent entry and the owner registry) at the completion boundary; a missing or disagreeing registry blocks completion.
 
 ## Agent entry projection
 

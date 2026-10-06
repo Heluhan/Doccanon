@@ -78,6 +78,101 @@ class DocCanonCLITest(unittest.TestCase):
         checked = json.loads(self.cli(root, "check", "--json").stdout)
         self.assertEqual("disabled", checked["status"])
 
+    def test_enable_is_idempotent_and_preserves_governance(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        architecture = root / "docs" / "architecture.md"
+        self.write_architecture(architecture)
+        self.cli(root, "mark-verified", "docs/architecture.md", "--covers", "src/**", "--domain", "architecture")
+        self.cli(root, "promote", "--domain", "architecture")
+        git(root, "add", ".")
+        git(root, "commit", "-qm", "govern architecture")
+        config_path = root / ".doccanon.yml"
+        before = config_path.read_text(encoding="utf-8")
+
+        again = json.loads(self.cli(root, "enable", "--json").stdout)
+        self.assertTrue(again["already_enabled"])
+        self.assertEqual("governed", again["maturity"])
+        self.assertEqual(before, config_path.read_text(encoding="utf-8"))
+        checked = json.loads(self.cli(root, "check", "--json").stdout)
+        self.assertEqual("synchronized", checked["status"])
+
+    def test_registry_closed_world_check_and_refresh(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        self.assertTrue((root / "docs" / "registry.json").is_file())
+        extra = root / "docs" / "glossary-extra.md"
+        extra.write_text(
+            "---\ndoccanon_authority: human-confirmed\n---\n\n# Extra glossary\n\nTerm.\n",
+            encoding="utf-8",
+        )
+        checked = json.loads(self.cli(root, "check", "--json", check=False).stdout)
+        self.assertIn("unregistered-owner", {item["code"] for item in checked["findings"]})
+        status = self.cli(root, "registry", "status", "--json", check=False)
+        self.assertEqual(1, status.returncode)
+        self.assertEqual("drift", json.loads(status.stdout)["status"])
+        self.cli(root, "registry", "build")
+        ready = json.loads(self.cli(root, "check", "--json", check=False).stdout)
+        self.assertNotIn("unregistered-owner", {item["code"] for item in ready["findings"]})
+        extra.unlink()
+        checked_again = json.loads(self.cli(root, "check", "--json", check=False).stdout)
+        self.assertIn("stale-registry-entry", {item["code"] for item in checked_again["findings"]})
+        self.cli(root, "registry", "build")
+        clean = json.loads(self.cli(root, "check", "--json", check=False).stdout)
+        self.assertNotIn("stale-registry-entry", {item["code"] for item in clean["findings"]})
+
+    def test_retired_feature_contract_is_guarded_and_archived_on_upgrade(self) -> None:
+        temp, root = self.make_repo()
+        self.addCleanup(temp.cleanup)
+        self.cli(root, "enable")
+        features = root / "docs" / "features"
+        features.mkdir()
+        contract = features / "legacy-feature.md"
+        contract.write_text(
+            "---\ndoccanon_authority: current-state\ndoccanon_covers:\n  - \"src/**\"\n"
+            "doccanon_domains:\n  - \"features\"\ndoccanon_feature: legacy-feature\n---\n\n"
+            "# Legacy feature\n\n## User outcome\n\nOld behavior.\n",
+            encoding="utf-8",
+        )
+        manifest = features / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "features": [
+                        {
+                            "id": "legacy-feature",
+                            "name": "Legacy feature",
+                            "status": "retired",
+                            "document": "docs/features/legacy-feature.md",
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        status = json.loads(self.cli(root, "features", "status", "--json", check=False).stdout)
+        self.assertEqual("incomplete", status["status"])
+        self.assertTrue(any("still declares authority" in finding for finding in status["findings"]))
+
+        report = json.loads(self.cli(root, "upgrade", "status", "--json", check=False).stdout)
+        self.assertIn("retired-feature-contract", {step["id"] for step in report["steps"]})
+        applied = json.loads(self.cli(root, "upgrade", "apply", "--json", check=False).stdout)
+        self.assertEqual("applied", applied["status"])
+        self.assertIn("retired-feature-contract", applied["applied"])
+        self.assertFalse(contract.exists())
+        archived = root / ".doccanon" / "archive" / "docs" / "features" / "legacy-feature.md"
+        self.assertTrue(archived.is_file())
+        retired_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+        feature = retired_manifest["features"][0]
+        self.assertEqual("retired", feature["status"])
+        self.assertIn(".doccanon/archive/", feature["document"])
+        self.assertEqual("complete", json.loads(self.cli(root, "features", "status", "--json").stdout)["status"])
+
     def test_staged_covered_code_requires_doc_update(self) -> None:
         temp, root = self.make_repo()
         self.addCleanup(temp.cleanup)
@@ -233,8 +328,10 @@ class DocCanonCLITest(unittest.TestCase):
         config_path = root / ".doccanon.yml"
         text = config_path.read_text(encoding="utf-8")
         text = re.sub(r"doccanon_version: [^\n]*\n", "", text)
+        text = re.sub(r"registry: [^\n]*\n", "", text)
         text = "schema_version: 3\n" + text + 'branch_policy: "aware"\nreconsider: "manual"\n'
         config_path.write_text(text, encoding="utf-8")
+        (root / "docs" / "registry.json").unlink()
         (root / "AGENTS.md").write_text("# House rules\n\nUse pnpm.\n", encoding="utf-8")
         (root / "docs" / "proposal.md").write_text(
             "---\ndoccanon_authority: proposal\n---\n\n# Proposal\n\nFuture thing.\n",
@@ -248,6 +345,7 @@ class DocCanonCLITest(unittest.TestCase):
         self.assertIn("config-cleanup", step_ids)
         self.assertIn("legacy-agent-entry", step_ids)
         self.assertIn("unknown-authorities", step_ids)
+        self.assertIn("registry-index", step_ids)
 
         checked = json.loads(self.cli(root, "check", "--json", check=False).stdout)
         self.assertIn("project-upgrade-required", {item["code"] for item in checked["findings"]})
@@ -270,6 +368,8 @@ class DocCanonCLITest(unittest.TestCase):
         self.assertEqual("applied", final["status"])
         stamped = config_path.read_text(encoding="utf-8")
         self.assertIn(f'doccanon_version: "{report["skill_version"]}"', stamped)
+        self.assertIn("registry:", stamped)
+        self.assertTrue((root / "docs" / "registry.json").is_file())
 
         current = json.loads(self.cli(root, "upgrade", "status", "--json").stdout)
         self.assertEqual("current", current["status"])
@@ -329,6 +429,7 @@ class DocCanonCLITest(unittest.TestCase):
         self.assertEqual("stale", stale["status"])
         self.assertIn("stale-agent-entry", {item["code"] for item in stale["findings"]})
         self.cli(root, "render")
+        self.cli(root, "registry", "build")
         ready = json.loads(self.cli(root, "check", "--json").stdout)
         self.assertEqual("synchronized", ready["status"])
 
@@ -558,6 +659,9 @@ class DocCanonCLITest(unittest.TestCase):
         self.assertIn(".doccanon/archive/", ignore)
         self.assertEqual(".ignore", retired["search_ignore"]["file"])
         self.assertTrue(retired["search_ignore"]["updated"])
+        self.assertEqual("recorded", retired["archive_index"]["status"])
+        archive_index = (root / ".doccanon" / "archive" / "README.md").read_text(encoding="utf-8")
+        self.assertIn("notes/legacy.md", archive_index)
 
         (root / "notes" / "second.md").write_text("# Second\n\nOld too.\n", encoding="utf-8")
         again = json.loads(self.cli(root, "retire", "notes/second.md", "--json").stdout)
@@ -1247,6 +1351,7 @@ class DocCanonCLITest(unittest.TestCase):
         )
         self.assertEqual("synchronized", completed["status"])
         self.assertEqual(["architecture"], completed["impact_receipt"]["affected_domains"])
+        self.assertIsNotNone(completed.get("registry"))
         development_path = root / completed["development_log"]["path"]
         development_text = development_path.read_text(encoding="utf-8")
         self.assertIn("Affected domain: `architecture`", development_text)

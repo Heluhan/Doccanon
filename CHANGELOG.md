@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.0
+
+- Added the generated owner registry (`docs/registry.json`): routable owners are enumerated in one machine-readable file, `check` fails on missing, stale, or outdated entries, and `sync complete`, `promote`, and `upgrade` refresh it.
+- Added the retired-feature contract guard: a feature marked retired may not keep an active contract; `upgrade apply` archives leftovers from pre-0.14 projects.
+- Added an archive index: `retire` appends a provenance row (document, disposition, reason, revision) to `<archive>/README.md`.
+- `enable` is now idempotent: re-admission preserves governance state instead of resetting maturity and manifest configuration.
+- Established the trunk-only version policy: branches never bump versions, CI rejects branch-local bumps, and releases are tagged on `main`.
+
 ## 0.13.1
 
 - Documented the two upgrade layers: host-side skill updates and project-side reconciliation; a project agent never fetches the skill.

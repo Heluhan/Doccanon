@@ -22,6 +22,7 @@ from typing import Any, Iterable
 CONFIG_NAME = ".doccanon.yml"
 DEFAULT_MIGRATION_MANIFEST = "docs/operations/doccanon-migration.json"
 DEFAULT_FEATURE_MANIFEST = "docs/features/manifest.json"
+DEFAULT_REGISTRY = "docs/registry.json"
 DEFAULT_AGENT_ENTRY = "AGENTS.md"
 DEFAULT_AGENT_ADAPTERS = ("claude",)
 AGENT_ADAPTER_FILES = {"claude": "CLAUDE.md", "gemini": "GEMINI.md"}
@@ -215,6 +216,7 @@ def dump_config(data: dict[str, Any]) -> str:
         "required_domains",
         "migration_manifest",
         "feature_manifest",
+        "registry",
         "archive_root",
         "agent_entry",
         "agent_adapters",
@@ -373,6 +375,19 @@ def now_iso() -> str:
 
 
 def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = False) -> dict[str, Any]:
+    existing = load_config(root)
+    if existing is not None and existing.get("status") == "enabled":
+        created = ensure_base_docs(root, existing)
+        projection = render_agent_entries(root, existing, write=False)
+        return {
+            "status": "enabled",
+            "already_enabled": True,
+            "config": CONFIG_NAME,
+            "created": created,
+            "maturity": existing.get("maturity", "bootstrapping"),
+            "doccanon_version": existing.get("doccanon_version"),
+            "agent_entry": projection,
+        }
     branch = branch_context(root)
     if branch["kind"] == "feature" and not allow_feature_branch:
         raise DocCanonError(
@@ -388,6 +403,7 @@ def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = F
         "docs_root": "docs",
         "context_file": "CONTEXT.md",
         "required_domains": [],
+        "registry": DEFAULT_REGISTRY,
         "archive_root": DEFAULT_ARCHIVE_ROOT,
         "agent_entry": DEFAULT_AGENT_ENTRY,
         "agent_adapters": list(DEFAULT_AGENT_ADAPTERS),
@@ -401,12 +417,14 @@ def enable(root: Path, allow_feature_branch: bool = False, allow_dirty: bool = F
     created = ensure_base_docs(root, config)
     projected = render_agent_entries(root, config, write=True)
     created.extend(item["path"] for item in projected["files"] if item["changed"])
+    registry = build_registry(root, config)
     return {
         "status": "enabled",
         "config": CONFIG_NAME,
         "created": created,
         "branch": branch,
         "agent_entry": projected,
+        "registry": registry,
     }
 
 
@@ -628,7 +646,167 @@ def agent_entry_targets(config: dict[str, Any]) -> list[tuple[str, str]]:
 def doccanon_artifact_paths(config: dict[str, Any]) -> set[str]:
     paths = {relative for relative, _ in agent_entry_targets(config)}
     paths.update({".ignore", ".rgignore"})
+    registry = str(config.get("registry", "")).strip()
+    if registry:
+        paths.add(normalize_relative_path(registry, "registry"))
     return paths
+
+
+def registry_rel(config: dict[str, Any]) -> str:
+    value = str(config.get("registry", "")).strip() or DEFAULT_REGISTRY
+    return normalize_relative_path(value, "registry").rstrip("/")
+
+
+def registry_path(root: Path, config: dict[str, Any]) -> Path:
+    return (root / registry_rel(config)).resolve()
+
+
+def registry_entries(
+    root: Path,
+    config: dict[str, Any],
+    records: list[DocumentRecord] | None = None,
+) -> list[dict[str, Any]]:
+    archive_rel = archive_root_relative(config)
+    archive_prefix = archive_rel + "/" if archive_rel else None
+    entries: list[dict[str, Any]] = []
+    for record in records if records is not None else document_records(root, config):
+        if record.authority not in CONTEXT_AUTHORITIES:
+            continue
+        if archive_prefix and (record.relative == archive_rel or record.relative.startswith(archive_prefix)):
+            continue
+        entries.append(
+            {
+                "document": record.relative,
+                "authority": record.authority,
+                "domains": sorted(record.domains),
+                "covers": sorted(record.covers),
+                "verified_at": record.verified_at,
+            }
+        )
+    entries.sort(key=lambda item: item["document"])
+    return entries
+
+
+def read_registry(root: Path, config: dict[str, Any]) -> dict[str, Any] | None:
+    path = registry_path(root, config)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DocCanonError(f"Invalid canonical registry: {exc}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("entries"), list):
+        raise DocCanonError("Invalid canonical registry: entries must be an array")
+    return payload
+
+
+def registry_findings(
+    root: Path,
+    config: dict[str, Any],
+    records: list[DocumentRecord],
+) -> list[Finding]:
+    payload = read_registry(root, config)
+    if payload is None:
+        return [
+            Finding(
+                "error",
+                "missing-registry",
+                "Owner registry is missing; run registry build",
+                registry_rel(config),
+            )
+        ]
+    expected = {entry["document"]: entry for entry in registry_entries(root, config, records)}
+    actual: dict[str, dict[str, Any]] = {}
+    for entry in payload.get("entries", []):
+        if isinstance(entry, dict) and str(entry.get("document", "")).strip():
+            actual[str(entry["document"])] = entry
+    fields = ("authority", "domains", "covers", "verified_at")
+    findings: list[Finding] = []
+    for document in sorted(set(expected) - set(actual)):
+        findings.append(
+            Finding(
+                "error",
+                "unregistered-owner",
+                "Active authority document is not in the owner registry; run registry build",
+                document,
+            )
+        )
+    for document in sorted(set(actual) - set(expected)):
+        findings.append(
+            Finding(
+                "error",
+                "stale-registry-entry",
+                "Owner registry entry has no active document; run registry build",
+                document,
+            )
+        )
+    for document in sorted(set(expected) & set(actual)):
+        expected_fields = {field: expected[document].get(field) for field in fields}
+        actual_fields = {field: actual[document].get(field) for field in fields}
+        if expected_fields != actual_fields:
+            findings.append(
+                Finding(
+                    "error",
+                    "registry-entry-outdated",
+                    "Owner registry entry is out of date; run registry build",
+                    document,
+                )
+            )
+    return findings
+
+
+def registry_report(
+    root: Path,
+    config: dict[str, Any],
+    records: list[DocumentRecord] | None = None,
+) -> tuple[dict[str, Any], list[Finding]]:
+    if not str(config.get("registry", "")).strip():
+        return {"status": "not-configured", "registry": None, "entry_count": 0, "finding_count": 0}, []
+    records = records if records is not None else document_records(root, config)
+    findings = registry_findings(root, config, records)
+    payload = read_registry(root, config)
+    status = "missing" if payload is None else ("consistent" if not findings else "drift")
+    return (
+        {
+            "status": status,
+            "registry": registry_rel(config),
+            "entry_count": len(payload.get("entries", [])) if payload else 0,
+            "finding_count": len(findings),
+        },
+        findings,
+    )
+
+
+def registry_needs_build(
+    root: Path,
+    config: dict[str, Any],
+    records: list[DocumentRecord] | None = None,
+) -> bool:
+    if not str(config.get("registry", "")).strip():
+        return True
+    summary, _ = registry_report(root, config, records)
+    return summary["status"] in {"missing", "drift"}
+
+
+def build_registry(root: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or load_config(root)
+    if config is None or config["status"] != "enabled":
+        raise DocCanonError("registry requires an enabled DocCanon project")
+    path = registry_path(root, config)
+    payload = {
+        "schema_version": 1,
+        "source_revision": git_head(root),
+        "entries": registry_entries(root, config),
+    }
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    if not path.is_file() or path.read_text(encoding="utf-8") != rendered:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered, encoding="utf-8")
+    return {
+        "status": "built",
+        "registry": path.relative_to(root).as_posix(),
+        "entry_count": len(payload["entries"]),
+    }
 
 
 def is_repo_meta(relative: str) -> bool:
@@ -884,6 +1062,97 @@ def with_retired_notice(text: str, notice: str) -> str:
     return notice + "\n\n" + text
 
 
+def append_archive_index(
+    root: Path,
+    config: dict[str, Any],
+    target_rel: str,
+    disposition: str,
+    reason: str,
+) -> dict[str, Any]:
+    archive_rel = archive_root_relative(config)
+    if not archive_rel:
+        return {"status": "skipped", "path": None}
+    index = root / archive_rel / "README.md"
+    marker = f"<!-- doccanon-archived: {target_rel} -->"
+    if index.is_file() and marker in index.read_text(encoding="utf-8", errors="replace"):
+        return {"status": "already-recorded", "path": index.relative_to(root).as_posix()}
+    if not index.exists():
+        index.parent.mkdir(parents=True, exist_ok=True)
+        index.write_text(
+            "---\ndoccanon_authority: historical\n---\n\n"
+            "# Archive\n\n"
+            "Frozen, non-current material retained for provenance. Read only for archaeology; "
+            "never treat it as current truth.\n\n"
+            "| Document | Disposition | Reason | Retired at |\n|---|---|---|---|\n",
+            encoding="utf-8",
+        )
+    revision = (git_head(root) or "unknown")[:12]
+    row = f"| {marker} `{target_rel}` | {disposition} | {reason or '-'} | {now_iso()} `{revision}` |\n"
+    with index.open("a", encoding="utf-8") as handle:
+        handle.write(row)
+    return {"status": "recorded", "path": index.relative_to(root).as_posix()}
+
+
+def retire_feature_link(
+    root: Path,
+    config: dict[str, Any],
+    feature_id: str,
+    document: str,
+) -> dict[str, Any] | None:
+    manifest_rel = str(config.get("feature_manifest", DEFAULT_FEATURE_MANIFEST))
+    path = root / manifest_rel
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DocCanonError(f"Invalid feature manifest: {exc}") from exc
+    changed = False
+    for feature in payload.get("features", []):
+        if isinstance(feature, dict) and str(feature.get("id", "")) == feature_id:
+            feature["status"] = "retired"
+            feature["document"] = document
+            changed = True
+            break
+    if not changed:
+        return None
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"feature": feature_id, "status": "retired", "document": document}
+
+
+def retired_current_feature_docs(root: Path, config: dict[str, Any]) -> list[str]:
+    manifest_rel = str(config.get("feature_manifest", DEFAULT_FEATURE_MANIFEST))
+    path = root / manifest_rel
+    if not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DocCanonError(f"Invalid feature manifest: {exc}") from exc
+    archive_rel = archive_root_relative(config)
+    archive_prefix = archive_rel + "/" if archive_rel else None
+    documents: list[str] = []
+    for feature in payload.get("features", []):
+        if not isinstance(feature, dict) or feature.get("status") != "retired":
+            continue
+        document = str(feature.get("document", "")).strip()
+        if not document:
+            continue
+        resolved = (root / document).resolve()
+        try:
+            relative = resolved.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if archive_prefix and (relative == archive_rel or relative.startswith(archive_prefix)):
+            continue
+        if not resolved.is_file():
+            continue
+        authority = str(frontmatter(resolved.read_text(encoding="utf-8", errors="replace")).get("doccanon_authority", "unclassified"))
+        if authority in CONTEXT_AUTHORITIES:
+            documents.append(relative)
+    return sorted(documents)
+
+
 def retire_document(
     root: Path,
     document: str,
@@ -891,6 +1160,7 @@ def retire_document(
     owner: str | None,
     disposition: str,
     pointer: bool,
+    allow_active: bool = False,
 ) -> dict[str, Any]:
     config = load_config(root)
     if config is None or config["status"] != "enabled":
@@ -917,7 +1187,7 @@ def retire_document(
         raise DocCanonError(f"{relative} is managed by DocCanon and cannot be retired")
     text = source.read_text(encoding="utf-8", errors="replace")
     authority = str(frontmatter(text).get("doccanon_authority", "unclassified"))
-    if authority in CONTEXT_AUTHORITIES:
+    if authority in CONTEXT_AUTHORITIES and not allow_active:
         raise DocCanonError(
             f"{relative} still has active authority {authority!r}; update or remove its canonical ownership first"
         )
@@ -966,6 +1236,14 @@ def retire_document(
         pointer_path = relative
     else:
         source.unlink()
+    feature_update = None
+    feature_id = str(frontmatter(text).get("doccanon_feature", "")).strip()
+    if feature_id:
+        feature_update = retire_feature_link(root, config, feature_id, archived_to)
+    index = append_archive_index(root, config, archived_to, stamp, reason)
+    registry = None
+    if str(config.get("registry", "")).strip() and registry_path(root, config).is_file():
+        registry = build_registry(root, config)
     return {
         "status": "retired",
         "document": relative,
@@ -974,6 +1252,9 @@ def retire_document(
         "disposition": disposition,
         "pointer": pointer_path,
         "owner": owner.strip() if owner else None,
+        "feature": feature_update,
+        "archive_index": index,
+        "registry": registry,
         "search_ignore": ensure_search_ignore(root, config),
     }
 
@@ -1062,6 +1343,25 @@ def upgrade_report(root: Path) -> dict[str, Any]:
                 "paths": decisions[:10],
             }
         )
+    if registry_needs_build(root, config, records):
+        steps.append(
+            {
+                "id": "registry-index",
+                "kind": "mechanical",
+                "description": "Owner registry is missing or out of date; upgrade apply builds it",
+            }
+        )
+    retired_contracts = retired_current_feature_docs(root, config)
+    if retired_contracts:
+        steps.append(
+            {
+                "id": "retired-feature-contract",
+                "kind": "mechanical",
+                "description": f"{len(retired_contracts)} retired feature(s) still keep an active contract; "
+                "upgrade apply archives them",
+                "paths": retired_contracts[:10],
+            }
+        )
     configured = set(config_list(config, "agent_adapters", list(DEFAULT_AGENT_ADAPTERS)))
     for adapter, filename in sorted(AGENT_ADAPTER_FILES.items()):
         if adapter in configured:
@@ -1101,7 +1401,6 @@ def upgrade_apply(root: Path) -> dict[str, Any]:
     for key in legacy_keys:
         config.pop(key, None)
     applied = ["config-cleanup"] if legacy_keys else []
-    pending = [step for step in report["steps"] if step["kind"] == "semantic"]
     if report["status"] == "current" and not legacy_keys:
         return {
             "status": "current",
@@ -1112,6 +1411,26 @@ def upgrade_apply(root: Path) -> dict[str, Any]:
             "pending_steps": [],
             "install": report.get("install"),
         }
+    archived_contracts: list[dict[str, Any]] = []
+    for document in retired_current_feature_docs(root, config):
+        result = retire_document(
+            root,
+            document,
+            "Feature was already marked retired; archived while adopting the DocCanon contract",
+            None,
+            "historical",
+            False,
+            allow_active=True,
+        )
+        archived_contracts.append({"document": document, "archived_to": result.get("archived_to")})
+    if archived_contracts:
+        applied.append("retired-feature-contract")
+    if not str(config.get("registry", "")).strip():
+        config["registry"] = DEFAULT_REGISTRY
+    if registry_needs_build(root, config, document_records(root, config)):
+        build_registry(root, config)
+        applied.append("registry-index")
+    pending = [step for step in report["steps"] if step["kind"] == "semantic"]
     if pending:
         write_config(root, config)
         return {
@@ -1121,6 +1440,7 @@ def upgrade_apply(root: Path) -> dict[str, Any]:
             "skill_version": report["skill_version"],
             "applied": applied,
             "pending_steps": pending,
+            "archived_contracts": archived_contracts,
             "next": "Resolve every pending step, then rerun upgrade apply. See references/upgrading.md.",
             "install": report.get("install"),
         }
@@ -1133,6 +1453,7 @@ def upgrade_apply(root: Path) -> dict[str, Any]:
         "skill_version": report["skill_version"],
         "applied": applied + ["version-stamp"],
         "pending_steps": [step for step in report["steps"] if step["kind"] == "info"],
+        "archived_contracts": archived_contracts,
         "install": report.get("install"),
     }
 
@@ -1429,6 +1750,25 @@ def feature_manifest_status(root: Path, manifest: str) -> dict[str, Any]:
                 unresolved += 1
             continue
         if state == "retired":
+            retired_document = str(feature.get("document", "")).strip()
+            if retired_document:
+                retired_path = (root / retired_document).resolve()
+                try:
+                    retired_relative = retired_path.relative_to(root).as_posix()
+                except ValueError:
+                    retired_relative = ""
+                if retired_relative and retired_path.is_file():
+                    authority = str(
+                        frontmatter(retired_path.read_text(encoding="utf-8", errors="replace")).get(
+                            "doccanon_authority", "unclassified"
+                        )
+                    )
+                    if authority in CONTEXT_AUTHORITIES:
+                        findings.append(
+                            f"feature {identifier} is retired but {retired_document} still declares "
+                            f"authority {authority!r}; archive it with the upgrade pass or retire"
+                        )
+                        unresolved += 1
             continue
         if state != "current":
             findings.append(f"feature {identifier} has unresolved status: {state}")
@@ -1667,6 +2007,8 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
                 files=unclassified_decisions[:20],
             )
         )
+    registry_summary, registry_problems = registry_report(root, config, records)
+    findings.extend(registry_problems)
     archive_rel = archive_root_relative(config)
     if archive_rel and (root / archive_rel).is_dir() and not search_ignore_covers(root, archive_rel):
         findings.append(
@@ -1820,6 +2162,7 @@ def check_project(root: Path, base: str | None, staged: bool) -> tuple[dict[str,
         },
         "migration": manifest_report,
         "features": feature_report,
+        "registry": registry_summary,
         "findings": [asdict(item) for item in findings],
     }
     return result, 0 if status == "synchronized" else 1
@@ -2237,6 +2580,8 @@ def promote(
     )
     write_config(root, config)
     render_agent_entries(root, config, write=True, allow_adoption=False)
+    if str(config.get("registry", "")).strip():
+        build_registry(root, config)
     checked, _ = check_project(root, base=None, staged=False)
     if checked["status"] != "synchronized":
         config["maturity"] = "bootstrapping"
@@ -2517,6 +2862,9 @@ def complete_sync(
     for item in agent_entry["files"]:
         if item.get("blocked_legacy"):
             blockers.append({"code": "unreconciled-agent-entry", "path": item["path"]})
+    registry_result = None
+    if str(config.get("registry", "")).strip():
+        registry_result = build_registry(root, config)
     checked, _ = check_project(root, base=impact["target"], staged=False)
     if checked["status"] != "synchronized":
         blockers.append({"code": "doccanon-check", "status": checked["status"]})
@@ -2526,6 +2874,7 @@ def complete_sync(
             "impact": impact,
             "blockers": blockers,
             "agent_entry": agent_entry,
+            "registry": registry_result,
             "release_readiness": plan_readiness,
             "doccanon_check": checked,
         }, 1
@@ -2565,6 +2914,7 @@ def complete_sync(
         "release_log": release_log,
         "history_exclusion": skip_history,
         "agent_entry": agent_entry,
+        "registry": registry_result,
         "release_readiness": plan_readiness,
         "doccanon_check": checked,
     }, 0
@@ -2839,6 +3189,13 @@ def build_parser() -> argparse.ArgumentParser:
     item.add_argument("--check", action="store_true")
     item.add_argument("--json", action="store_true")
 
+    item = sub.add_parser("registry")
+    registry_sub = item.add_subparsers(dest="registry_action", required=True)
+    registry_build = registry_sub.add_parser("build")
+    registry_build.add_argument("--json", action="store_true")
+    registry_status = registry_sub.add_parser("status")
+    registry_status.add_argument("--json", action="store_true")
+
     item = sub.add_parser("upgrade")
     upgrade_sub = item.add_subparsers(dest="upgrade_action", required=True)
     upgrade_status = upgrade_sub.add_parser("status")
@@ -2967,6 +3324,16 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 0 if result["status"] == "synchronized" else 1
         elif args.command == "render":
             result, exit_code = render_command(root, args.check)
+        elif args.command == "registry":
+            config = load_config(root)
+            if config is None or config["status"] != "enabled":
+                raise DocCanonError("registry requires an enabled DocCanon project")
+            if args.registry_action == "build":
+                result, exit_code = build_registry(root, config), 0
+            else:
+                summary, problems = registry_report(root, config)
+                result = {**summary, "findings": [asdict(item) for item in problems]}
+                exit_code = 0 if summary["status"] in {"consistent", "not-configured"} else 1
         elif args.command == "upgrade":
             if args.upgrade_action == "status":
                 result = upgrade_report(root)
